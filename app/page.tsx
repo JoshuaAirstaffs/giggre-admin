@@ -1,9 +1,11 @@
-import Dashboard from "./dashboard/page";
+
+
+import TitlePage from "@/components/titlePage";
 
 export default function Home() {
   return (
     <div>
-      <Dashboard />
+      <TitlePage title="Dashboard" />
     </div>
   );
 }
