@@ -31,9 +31,7 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         <TooltipProvider>
-          <Dashboard>
-            {children}
-          </Dashboard>
+          {children}
         </TooltipProvider>
       </body>
     </html>
