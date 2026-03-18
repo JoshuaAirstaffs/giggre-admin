@@ -5,7 +5,7 @@ import AdminLayout from "@/components/layout/AdminLayout";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAdmins } from "@/hooks/useAdmins";
 import { ASSIGNABLE_MODULES } from "@/lib/modules";
-import Button from "@/components/ui/button";
+import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import Modal from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/Modal";

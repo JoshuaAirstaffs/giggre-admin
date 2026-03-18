@@ -1,7 +1,7 @@
 "use client";
 
 import AdminLayout from "@/components/layout/AdminLayout";
-import Button from "@/components/ui/button";
+import Button from "@/components/ui/Button";
 import { Save, KeyRound } from "lucide-react";
 
 export default function ProfilePage() {
