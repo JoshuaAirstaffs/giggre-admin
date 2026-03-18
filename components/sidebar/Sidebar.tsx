@@ -6,6 +6,7 @@ import {
   LayoutDashboard, Users, Briefcase, Shield, BarChart2,
   Settings, LogOut, ChevronLeft, ChevronRight, Activity,
   Map, Library, MegaphoneIcon,
+  LucideIcon,
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import type { AdminUser } from "@/context/AuthContext";
@@ -17,7 +18,7 @@ import type { ModuleKey } from "@/lib/modules";
 
 interface NavItem {
   href: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
+  icon: LucideIcon;
   label: string;
   module: ModuleKey;
 }
