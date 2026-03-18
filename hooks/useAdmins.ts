@@ -156,7 +156,7 @@ export function useAdmins() {
           action: "updated_admin",
           targetId: adminId,
           targetName: adminName,
-          meta: input,
+          meta: input as any,
         });
 
         await fetchAdmins();
