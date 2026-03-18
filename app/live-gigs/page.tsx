@@ -15,6 +15,7 @@ import {
 } from "@/components/shadcn-ui/card";
 import { Badge } from "@/components/shadcn-ui/badge";
 import { Briefcase } from "lucide-react";
+import { useAuthGuard } from "@/hooks/useAuthGuard";
 
 interface Application {
   id: string;
@@ -35,6 +36,7 @@ interface Gig {
 }
 
 export default function LiveGigsPage() {
+  useAuthGuard({ module: "live-gigs" });
   const [liveGigs, setLiveGigs] = useState<Gig[]>([]);
   const [loading, setLoading] = useState(false);
 
