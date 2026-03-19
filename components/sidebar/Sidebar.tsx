@@ -32,7 +32,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/announcements", icon: MegaphoneIcon,   label: "Announcements", module: "announcements" },
   { href: "/reports",       icon: BarChart2,       label: "Support",       module: "reports" },
   { href: "/settings",      icon: Settings,        label: "Settings",      module: "settings" },
-  { href: "/content-management",      icon: File,        label: "Content Management",      module: "content-managment" },
+  { href: "/content-management",      icon: File,        label: "Content Management",      module: "content-management" },
 ];
 
 const LIBRARY_ITEMS: NavItem[] = [
