@@ -1,13 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
-import { auth, db, googleProvider } from "@/lib/firebase";
+import { auth, googleProvider } from "@/lib/firebase";
+import { useAuth } from "@/context/AuthContext";
+import Image from "next/image";
+import ThemeToggle from "@/components/ui/ThemeToggle";
 
 export default function LoginPage() {
   const router = useRouter();
+
+  const { user, loading: authLoading } = useAuth();
+
+  useEffect(() => {
+    if (!authLoading && user) {
+      router.replace("/dashboard");
+    }
+  }, [user, authLoading, router]);
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -15,21 +26,13 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
-  // ── Email/password login (unchanged) ──────────────────────────────────────
+  // ── Email/password login ───────────────────────────────────────────────────
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
-      const credential = await signInWithEmailAndPassword(auth, email, password);
-      const userDoc = await getDoc(doc(db, "users", credential.user.uid));
-      if (!userDoc.exists()) {
-        await auth.signOut();
-        setError("Account not found in admin system.");
-        setLoading(false);
-        return;
-      }
-      router.replace("/dashboard");
+      await signInWithEmailAndPassword(auth, email, password);
     } catch (err: any) {
       let msg = "Something went wrong. Please try again.";
       switch (err.code) {
@@ -41,32 +44,28 @@ export default function LoginPage() {
         default: msg = err.message || msg;
       }
       setError(msg);
+    } finally {
       setLoading(false);
     }
   };
 
   // ── Google OAuth login ─────────────────────────────────────────────────────
-const handleGoogleLogin = async () => {
-  setError("");
-  setGoogleLoading(true);
-  try {
-    await signInWithPopup(auth, googleProvider);
-    // AuthContext handles the rest — if the email isn't in admins,
-    // it signs out and setUser(null), which triggers useAuthGuard → /login
-    router.replace("/dashboard");
-  } catch (err: any) {
-    if (err.code === "auth/popup-closed-by-user") {
+  const handleGoogleLogin = async () => {
+    setError("");
+    setGoogleLoading(true);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err: any) {
+      if (err.code === "auth/popup-closed-by-user") return;
+      if (err.code === "auth/popup-blocked") {
+        setError("Popup was blocked. Please allow popups for this site.");
+      } else {
+        setError("Sign-in failed. Your account may not be authorized.");
+      }
+    } finally {
       setGoogleLoading(false);
-      return;
     }
-    if (err.code === "auth/popup-blocked") {
-      setError("Popup was blocked. Please allow popups for this site.");
-    } else {
-      setError("Sign-in failed. Your account may not be authorized.");
-    }
-    setGoogleLoading(false);
-  }
-};
+  };
 
   const isAnyLoading = loading || googleLoading;
 
@@ -272,7 +271,7 @@ const handleGoogleLogin = async () => {
           background: var(--border);
         }
 
-        /* ── Remaining form styles (unchanged from original) ── */
+        /* ── Form fields ── */
         .err-box {
           background: var(--red-dim);
           border: 1px solid rgba(239,68,68,0.25);
@@ -372,7 +371,12 @@ const handleGoogleLogin = async () => {
           <div className="left-glow-br" />
           <div className="branding">
             <div className="logo-wrap">
-              <img className="logo-img" src="/images/giggre-logo.png" alt="Giggre"
+              <Image
+                className="logo-img"
+                src="/images/logo.png"
+                alt="Giggre"
+                width={180}
+                height={60}
                 onError={(e) => {
                   const t = e.currentTarget;
                   t.style.display = "none";
@@ -401,11 +405,16 @@ const handleGoogleLogin = async () => {
         {/* RIGHT */}
         <main className="right">
           <div className="mobile-branding">
-            <img className="mobile-logo-img" src="/images/giggre-logo.png" alt="Giggre"
+            <Image
+              className="logo-img"
+              src="/images/logo.png"
+              alt="Giggre"
+              width={180}
+              height={60}
               onError={(e) => {
                 const t = e.currentTarget;
                 t.style.display = "none";
-                (t.nextElementSibling as HTMLElement)!.style.display = "block";
+                (t.nextElementSibling as HTMLElement)!.style.display = "flex";
               }}
             />
             <div style={{ display:"none",fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:22 }}>
@@ -498,8 +507,6 @@ const handleGoogleLogin = async () => {
                   </div>
                 </div>
 
-                <div className="forgot-row"><a href="#">Forgot password?</a></div>
-
                 {/* ── Submit ── */}
                 <form onSubmit={handleLogin}>
                   <button type="submit" className="submit-btn" disabled={isAnyLoading}>
@@ -521,7 +528,9 @@ const handleGoogleLogin = async () => {
             <p className="footer-note">© 2026 Giggre. All rights reserved.</p>
           </div>
         </main>
-
+        <div className="fixed bottom-4 right-4 z-50 bg-white dark:bg-gray-800 p-3 rounded-full shadow-lg hover:scale-105 transition-transform">
+          <ThemeToggle />
+        </div>
       </div>
     </>
   );

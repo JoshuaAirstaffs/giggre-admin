@@ -8,10 +8,7 @@ import {
   useCallback,
   ReactNode,
 } from "react";
-import {
-  onAuthStateChanged,
-  User,
-} from "firebase/auth";
+import { onAuthStateChanged, User } from "firebase/auth";
 import {
   doc,
   getDoc,
@@ -70,45 +67,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-      console.log("────────────────────────────────────");
-      console.log("🔥 onAuthStateChanged fired");
-      console.log("👤 Firebase user:", fbUser ? `${fbUser.email} (${fbUser.uid})` : "null");
+      // console.log("────────────────────────────────────");
+      // console.log("onAuthStateChanged fired");
+      // console.log("Firebase user:", fbUser ? `${fbUser.email} (${fbUser.uid})` : "null");
 
       setFirebaseUser(fbUser);
 
       if (!fbUser) {
-        console.log("ℹ️ No Firebase user — clearing state");
+        // console.log("No Firebase user — clearing state");
         setUser(null);
         setLoading(false);
         return;
       }
 
       try {
-        // ── Step 1: Check admins collection by UID ───────────────────────
-        console.log("🔍 Looking up admins/" + fbUser.uid);
+        // console.log("Looking up admins/" + fbUser.uid);
         const ref = doc(db, "admins", fbUser.uid);
         const snap = await getDoc(ref);
-        console.log("📄 Document exists:", snap.exists());
+        // console.log("Document exists:", snap.exists());
 
         if (snap.exists()) {
           const data = snap.data();
-          console.log("📋 Document data:", JSON.stringify(data, null, 2));
+          // console.log("Document data:", JSON.stringify(data, null, 2));
 
-          // ── isActive check ─────────────────────────────────────────────
-          console.log("✅ isActive value:", data.isActive, "| type:", typeof data.isActive);
+          // console.log("isActive value:", data.isActive, "| type:", typeof data.isActive);
 
           if (!data.isActive) {
-            console.warn("⛔ Admin is inactive — signing out");
+            // console.warn("Admin is inactive — signing out");
             await auth.signOut();
             setUser(null);
             setLoading(false);
             return;
           }
 
-          // ── Stamp lastLogin ────────────────────────────────────────────
-          console.log("🕐 Stamping lastLogin...");
+          //  console.log("Stamping lastLogin...");
           updateDoc(ref, { lastLogin: serverTimestamp() }).catch((err) => {
-            console.warn("⚠️ Failed to stamp lastLogin:", err);
+          // console.warn("Failed to stamp lastLogin:", err);
           });
 
           const adminUser: AdminUser = {
@@ -121,14 +115,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             photoURL: fbUser.photoURL,
           };
 
-          console.log("✅ Setting user:", JSON.stringify(adminUser, null, 2));
+          // console.log("Setting user:", JSON.stringify(adminUser, null, 2));
           setUser(adminUser);
           setLoading(false);
           return;
         }
 
-        // ── Step 2: Doc not found by UID — check for pending record ──────
-        console.log("⚠️ No doc found by UID — checking for pending record by email:", fbUser.email);
+        // console.log("No doc found by UID — checking for pending record by email:", fbUser.email);
 
         const pendingQ = query(
           collection(db, "admins"),
@@ -136,30 +129,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           where("isPending", "==", true)
         );
         const pendingSnap = await getDocs(pendingQ);
-        console.log("⏳ Pending docs found:", pendingSnap.size);
+        // console.log("Pending docs found:", pendingSnap.size);
 
         if (pendingSnap.empty) {
-          console.warn("⛔ No pending record found for:", fbUser.email, "— denying access");
+        // console.warn("No pending record found for:", fbUser.email, "— denying access");
           await auth.signOut();
           setUser(null);
           setLoading(false);
           return;
         }
 
-        // ── Step 3: Promote pending → real record ────────────────────────
         const pendingDoc = pendingSnap.docs[0];
         const pendingData = pendingDoc.data();
-        console.log("📋 Pending doc data:", JSON.stringify(pendingData, null, 2));
+        // console.log("Pending doc data:", JSON.stringify(pendingData, null, 2));
 
         if (!pendingData.isActive) {
-          console.warn("⛔ Pending admin is inactive — signing out");
+          // console.warn("Pending admin is inactive — signing out");
           await auth.signOut();
           setUser(null);
           setLoading(false);
           return;
         }
 
-        console.log("🔄 Promoting pending record to UID-based doc...");
+        // console.log("Promoting pending record to UID-based doc...");
         await setDoc(ref, {
           ...pendingData,
           id: fbUser.uid,
@@ -168,7 +160,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           updatedAt: serverTimestamp(),
         });
         await deleteDoc(pendingDoc.ref);
-        console.log("✅ Pending record promoted successfully");
+        // console.log("Pending record promoted successfully");
 
         const promotedUser: AdminUser = {
           uid: fbUser.uid,
@@ -180,18 +172,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           photoURL: fbUser.photoURL,
         };
 
-        console.log("✅ Setting promoted user:", JSON.stringify(promotedUser, null, 2));
+        // console.log("Setting promoted user:", JSON.stringify(promotedUser, null, 2));
         setUser(promotedUser);
-
       } catch (err) {
-        console.error("❌ AuthContext error — full details:", err);
-        console.error("❌ Error message:", (err as any)?.message);
-        console.error("❌ Error code:", (err as any)?.code);
+        // console.error("❌ AuthContext error — full details:", err);
+        // console.error("❌ Error message:", (err as any)?.message);
+        // console.error("❌ Error code:", (err as any)?.code);
         await auth.signOut();
         setUser(null);
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     });
 
     return () => unsubscribe();
@@ -201,7 +192,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hasPermission = useCallback(
     (module: ModuleKey): boolean => {
       if (!user) {
-        console.log("🔒 hasPermission('" + module + "') → false (no user)");
+        // console.log("hasPermission('" + module + "') → false (no user)");
         return false;
       }
       if (user.role === "super_admin") {
@@ -209,11 +200,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const result = user.permissions.includes(module);
       if (!result) {
-        console.log("🔒 hasPermission('" + module + "') → false (not in permissions:", user.permissions, ")");
+        // console.log("hasPermission('" + module + "') → false (not in permissions:", user.permissions, ")");
       }
       return result;
     },
-    [user]
+    [user],
   );
 
   return (
