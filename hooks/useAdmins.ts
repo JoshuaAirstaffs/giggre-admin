@@ -12,7 +12,7 @@ import {
   orderBy,
   serverTimestamp,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, auth } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
 import { writeLog } from "@/lib/activitylog";
 import type { ModuleKey } from "@/lib/modules";
@@ -39,6 +39,7 @@ export interface CreateAdminInput {
   name: string;
   role: AdminRole;
   permissions: ModuleKey[];
+  password?: string;
 }
 
 export interface UpdateAdminInput {
@@ -92,47 +93,95 @@ export function useAdmins() {
   }, [fetchAdmins]);
 
   // ── Create admin ───────────────────────────────────────────────────────
-  // Note: This creates a Firestore document. The user must sign in with
-  // the matching Google account to complete Firebase Auth provisioning.
-  // For full pre-provisioning, use Firebase Admin SDK in a Cloud Function.
   const createAdmin = useCallback(
-    async (input: CreateAdminInput): Promise<{ success: boolean; error?: string }> => {
+    async (
+      input: CreateAdminInput,
+    ): Promise<{ success: boolean; error?: string }> => {
       if (!user) return { success: false, error: "Not authenticated." };
+
       try {
-        // Use email as a temporary ID seed — will be replaced by Firebase UID on first login
-        // Best practice: use a Cloud Function to create via Admin SDK and get real UID.
-        // Here we store a "pending" record by email and match on first login.
-        const tempId = `pending_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-        await setDoc(doc(db, "admins", tempId), {
-          id: tempId,
-          email: input.email,
-          name: input.name,
-          role: input.role,
-          isActive: true,
-          permissions: input.permissions,
-          createdAt: serverTimestamp(),
-          createdBy: user.uid,
-          lastLogin: null,
-          updatedAt: serverTimestamp(),
-          updatedBy: user.uid,
-          isPending: true, // Resolved on first Google login
-        });
+        if (input.password) {
+          // ── Verify we have a current user before proceeding ──────────────────
+          const currentUser = auth.currentUser;
+          if (!currentUser) {
+            return { success: false, error: "Not authenticated. Please sign in again." };
+          }
+
+          // ── Get a fresh ID token ──────────────────────────────────────────────
+          const token = await currentUser.getIdToken(true); // true = force refresh
+          console.log("Token obtained:", token ? "yes" : "no — still null");
+
+          const res = await fetch("/api/admin/create-user", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              email: input.email,
+              name: input.name,
+              password: input.password,
+              role: input.role,
+              permissions: input.permissions,
+            }),
+          });
+
+          if (!res.ok) {
+            const body = await res.json();
+            return { success: false, error: body.error };
+          }
+
+          await fetchAdmins();
+          return { success: true };
+        } else {
+          const tempId = `pending_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+          await setDoc(doc(db, "admins", tempId), {
+            id: tempId,
+            email: input.email,
+            name: input.name,
+            role: input.role,
+            isActive: true,
+            permissions: input.permissions,
+            createdAt: serverTimestamp(),
+            createdBy: user.uid,
+            lastLogin: null,
+            updatedAt: serverTimestamp(),
+            updatedBy: user.uid,
+            isPending: true,
+          });
+        }
 
         await writeLog({
           actorId: user.uid,
           actorName: user.displayName ?? "Unknown",
           action: "created_admin",
           targetName: input.name,
-          meta: { email: input.email, role: input.role },
+          meta: {
+            email: input.email,
+            role: input.role,
+            authMethod: input.password ? "email_password" : "google_oauth",
+          },
         });
 
         await fetchAdmins();
         return { success: true };
       } catch (err: any) {
-        return { success: false, error: err.message ?? "Failed to create admin." };
+        let msg = err.message ?? "Failed to create admin.";
+        switch (err.code) {
+          case "auth/email-already-in-use":
+            msg = "An account with this email already exists in Firebase Auth.";
+            break;
+          case "auth/invalid-email":
+            msg = "Please enter a valid email address.";
+            break;
+          case "auth/weak-password":
+            msg = "Password must be at least 6 characters.";
+            break;
+        }
+        return { success: false, error: msg };
       }
     },
-    [user, fetchAdmins]
+    [user, fetchAdmins],
   );
 
   // ── Update admin ───────────────────────────────────────────────────────
@@ -140,7 +189,7 @@ export function useAdmins() {
     async (
       adminId: string,
       input: UpdateAdminInput,
-      adminName: string
+      adminName: string,
     ): Promise<{ success: boolean; error?: string }> => {
       if (!user) return { success: false, error: "Not authenticated." };
       try {
@@ -162,10 +211,13 @@ export function useAdmins() {
         await fetchAdmins();
         return { success: true };
       } catch (err: any) {
-        return { success: false, error: err.message ?? "Failed to update admin." };
+        return {
+          success: false,
+          error: err.message ?? "Failed to update admin.",
+        };
       }
     },
-    [user, fetchAdmins]
+    [user, fetchAdmins],
   );
 
   // ── Toggle isActive ────────────────────────────────────────────────────
@@ -173,7 +225,7 @@ export function useAdmins() {
     async (
       adminId: string,
       currentState: boolean,
-      adminName: string
+      adminName: string,
     ): Promise<{ success: boolean; error?: string }> => {
       if (!user) return { success: false, error: "Not authenticated." };
       try {
@@ -195,20 +247,22 @@ export function useAdmins() {
         await fetchAdmins();
         return { success: true };
       } catch (err: any) {
-        return { success: false, error: err.message ?? "Failed to toggle status." };
+        return {
+          success: false,
+          error: err.message ?? "Failed to toggle status.",
+        };
       }
     },
-    [user, fetchAdmins]
+    [user, fetchAdmins],
   );
 
   // ── Delete admin ───────────────────────────────────────────────────────
   const deleteAdmin = useCallback(
     async (
       adminId: string,
-      adminName: string
+      adminName: string,
     ): Promise<{ success: boolean; error?: string }> => {
       if (!user) return { success: false, error: "Not authenticated." };
-      // Prevent self-deletion
       if (adminId === user.uid) {
         return { success: false, error: "You cannot delete your own account." };
       }
@@ -226,10 +280,13 @@ export function useAdmins() {
         await fetchAdmins();
         return { success: true };
       } catch (err: any) {
-        return { success: false, error: err.message ?? "Failed to delete admin." };
+        return {
+          success: false,
+          error: err.message ?? "Failed to delete admin.",
+        };
       }
     },
-    [user, fetchAdmins]
+    [user, fetchAdmins],
   );
 
   // ── Update permissions only ────────────────────────────────────────────
@@ -237,7 +294,7 @@ export function useAdmins() {
     async (
       adminId: string,
       permissions: ModuleKey[],
-      adminName: string
+      adminName: string,
     ): Promise<{ success: boolean; error?: string }> => {
       if (!user) return { success: false, error: "Not authenticated." };
       try {
@@ -259,10 +316,13 @@ export function useAdmins() {
         await fetchAdmins();
         return { success: true };
       } catch (err: any) {
-        return { success: false, error: err.message ?? "Failed to update permissions." };
+        return {
+          success: false,
+          error: err.message ?? "Failed to update permissions.",
+        };
       }
     },
-    [user, fetchAdmins]
+    [user, fetchAdmins],
   );
 
   return {

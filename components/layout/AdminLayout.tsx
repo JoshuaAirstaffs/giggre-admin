@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Bell, Search } from "lucide-react";
 import Link from "next/link";
 import Sidebar from "@/components/sidebar/Sidebar";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
@@ -209,15 +208,7 @@ export default function AdminLayout({
 
           <div className="topbar-right">
             {actions && <div className="topbar-actions">{actions}</div>}
-            <div className="topbar-search">
-              <Search size={13} color="var(--text-muted)" />
-              <input placeholder="Search…" />
-            </div>
             <ThemeToggle/>
-            {/* <button className="topbar-icon-btn" title="Notifications">
-              <Bell size={15} />
-              <span className="notif-dot" />
-            </button> */}
 
             <Link href="/profile" className="topbar-avatar" title={user.displayName ?? "My Profile"}>
               {initials}

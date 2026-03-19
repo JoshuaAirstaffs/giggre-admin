@@ -40,15 +40,15 @@ export default function ThemeToggle() {
           position: absolute;
           transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1), opacity 0.2s;
         }
-        .theme-icon-sun  { transform: ${isDark  ? "translateY(0) rotate(0deg)"   : "translateY(20px) rotate(90deg)"}; opacity: ${isDark  ? 1 : 0}; }
-        .theme-icon-moon { transform: ${!isDark ? "translateY(0) rotate(0deg)"   : "translateY(20px) rotate(-90deg)"}; opacity: ${!isDark ? 1 : 0}; }
+        .theme-icon-sun  { transform: ${!isDark  ? "translateY(0) rotate(0deg)"   : "translateY(20px) rotate(90deg)"}; opacity: ${!isDark  ? 1 : 0}; }
+        .theme-icon-moon { transform: ${isDark ? "translateY(0) rotate(0deg)"   : "translateY(20px) rotate(-90deg)"}; opacity: ${isDark ? 1 : 0}; }
       `}</style>
 
-      <span className="theme-icon theme-icon-sun">
-        <Sun size={15} />
-      </span>
       <span className="theme-icon theme-icon-moon">
         <Moon size={15} />
+      </span>
+      <span className="theme-icon theme-icon-sun">
+        <Sun size={15} />
       </span>
     </button>
   );
