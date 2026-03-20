@@ -14,7 +14,7 @@ import {
 } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
-import { writeLog } from "@/lib/activitylog";
+import { writeLog, buildDescription } from "@/lib/activitylog";
 import type { ModuleKey } from "@/lib/modules";
 import type { AdminRole } from "@/context/AuthContext";
 
@@ -57,7 +57,7 @@ export function useAdmins() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // ── Fetch all admins ───────────────────────────────────────────────────
+  // ── Fetch all admins ───────────────────────────────────────────────────────
   const fetchAdmins = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -67,17 +67,17 @@ export function useAdmins() {
       const list: AdminRecord[] = snap.docs.map((d) => {
         const data = d.data();
         return {
-          id: d.id,
-          email: data.email ?? "",
-          name: data.name ?? "",
-          role: data.role ?? "admin",
-          isActive: data.isActive ?? true,
+          id:          d.id,
+          email:       data.email       ?? "",
+          name:        data.name        ?? "",
+          role:        data.role        ?? "admin",
+          isActive:    data.isActive    ?? true,
           permissions: data.permissions ?? [],
-          createdAt: data.createdAt?.toDate?.() ?? null,
-          createdBy: data.createdBy ?? "",
-          lastLogin: data.lastLogin?.toDate?.() ?? null,
-          updatedAt: data.updatedAt?.toDate?.() ?? null,
-          updatedBy: data.updatedBy ?? "",
+          createdAt:   data.createdAt?.toDate?.()  ?? null,
+          createdBy:   data.createdBy   ?? "",
+          lastLogin:   data.lastLogin?.toDate?.()  ?? null,
+          updatedAt:   data.updatedAt?.toDate?.()  ?? null,
+          updatedBy:   data.updatedBy   ?? "",
         };
       });
       setAdmins(list);
@@ -88,40 +88,38 @@ export function useAdmins() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchAdmins();
-  }, [fetchAdmins]);
+  useEffect(() => { fetchAdmins(); }, [fetchAdmins]);
 
-  // ── Create admin ───────────────────────────────────────────────────────
+  // ── Shared actor fields ────────────────────────────────────────────────────
+  const actor = useCallback(() => ({
+    actorId:    user?.uid            ?? "",
+    actorName:  user?.displayName   ?? "Unknown",
+    actorEmail: user?.email         ?? "",
+  }), [user]);
+
+  // ── createAdmin ────────────────────────────────────────────────────────────
   const createAdmin = useCallback(
-    async (
-      input: CreateAdminInput,
-    ): Promise<{ success: boolean; error?: string }> => {
+    async (input: CreateAdminInput): Promise<{ success: boolean; error?: string }> => {
       if (!user) return { success: false, error: "Not authenticated." };
 
       try {
         if (input.password) {
-          // ── Verify we have a current user before proceeding ──────────────────
+          // Email/password path — delegated to the API route which writes its own log
           const currentUser = auth.currentUser;
-          if (!currentUser) {
-            return { success: false, error: "Not authenticated. Please sign in again." };
-          }
+          if (!currentUser) return { success: false, error: "Not authenticated. Please sign in again." };
 
-          // ── Get a fresh ID token ──────────────────────────────────────────────
-          const token = await currentUser.getIdToken(true); // true = force refresh
-          console.log("Token obtained:", token ? "yes" : "no — still null");
-
+          const token = await currentUser.getIdToken(true);
           const res = await fetch("/api/admin/create-user", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Authorization": `Bearer ${token}`,
+              Authorization: `Bearer ${token}`,
             },
             body: JSON.stringify({
-              email: input.email,
-              name: input.name,
-              password: input.password,
-              role: input.role,
+              email:       input.email,
+              name:        input.name,
+              password:    input.password,
+              role:        input.role,
               permissions: input.permissions,
             }),
           });
@@ -133,33 +131,35 @@ export function useAdmins() {
 
           await fetchAdmins();
           return { success: true };
-        } else {
-          const tempId = `pending_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-          await setDoc(doc(db, "admins", tempId), {
-            id: tempId,
-            email: input.email,
-            name: input.name,
-            role: input.role,
-            isActive: true,
-            permissions: input.permissions,
-            createdAt: serverTimestamp(),
-            createdBy: user.uid,
-            lastLogin: null,
-            updatedAt: serverTimestamp(),
-            updatedBy: user.uid,
-            isPending: true,
-          });
         }
 
+        // Google OAuth pending record
+        const tempId = `pending_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        await setDoc(doc(db, "admins", tempId), {
+          id:          tempId,
+          email:       input.email,
+          name:        input.name,
+          role:        input.role,
+          isActive:    true,
+          permissions: input.permissions,
+          createdAt:   serverTimestamp(),
+          createdBy:   user.uid,
+          lastLogin:   null,
+          updatedAt:   serverTimestamp(),
+          updatedBy:   user.uid,
+          isPending:   true,
+        });
+
         await writeLog({
-          actorId: user.uid,
-          actorName: user.displayName ?? "Unknown",
-          action: "created_admin",
-          targetName: input.name,
+          ...actor(),
+          module:      "admin_management",
+          action:      "created_admin",
+          description: buildDescription.createdAdmin(input.name, input.email, "google_oauth"),
+          targetId:    tempId,
+          targetName:  input.name,
+          affectedFiles: [`admins/${tempId}`],
           meta: {
-            email: input.email,
-            role: input.role,
-            authMethod: input.password ? "email_password" : "google_oauth",
+            other: { email: input.email, role: input.role, authMethod: "google_oauth" },
           },
         });
 
@@ -167,29 +167,22 @@ export function useAdmins() {
         return { success: true };
       } catch (err: any) {
         let msg = err.message ?? "Failed to create admin.";
-        switch (err.code) {
-          case "auth/email-already-in-use":
-            msg = "An account with this email already exists in Firebase Auth.";
-            break;
-          case "auth/invalid-email":
-            msg = "Please enter a valid email address.";
-            break;
-          case "auth/weak-password":
-            msg = "Password must be at least 6 characters.";
-            break;
-        }
+        if (err.code === "auth/email-already-in-use") msg = "An account with this email already exists.";
+        if (err.code === "auth/invalid-email")        msg = "Please enter a valid email address.";
+        if (err.code === "auth/weak-password")        msg = "Password must be at least 6 characters.";
         return { success: false, error: msg };
       }
     },
-    [user, fetchAdmins],
+    [user, actor, fetchAdmins],
   );
 
-  // ── Update admin ───────────────────────────────────────────────────────
+  // ── updateAdmin ────────────────────────────────────────────────────────────
   const updateAdmin = useCallback(
     async (
       adminId: string,
       input: UpdateAdminInput,
       adminName: string,
+      previousValues?: Partial<UpdateAdminInput>,
     ): Promise<{ success: boolean; error?: string }> => {
       if (!user) return { success: false, error: "Not authenticated." };
       try {
@@ -200,27 +193,26 @@ export function useAdmins() {
         });
 
         await writeLog({
-          actorId: user.uid,
-          actorName: user.displayName ?? "Unknown",
-          action: "updated_admin",
-          targetId: adminId,
-          targetName: adminName,
-          meta: input as any,
+          ...actor(),
+          module:      "admin_management",
+          action:      "updated_admin",
+          description: buildDescription.updatedAdmin(user.displayName ?? "Unknown", adminName),
+          targetId:    adminId,
+          targetName:  adminName,
+          affectedFiles: [`admins/${adminId}`],
+          meta: { from: previousValues ?? null, to: input },
         });
 
         await fetchAdmins();
         return { success: true };
       } catch (err: any) {
-        return {
-          success: false,
-          error: err.message ?? "Failed to update admin.",
-        };
+        return { success: false, error: err.message ?? "Failed to update admin." };
       }
     },
-    [user, fetchAdmins],
+    [user, actor, fetchAdmins],
   );
 
-  // ── Toggle isActive ────────────────────────────────────────────────────
+  // ── toggleActive ───────────────────────────────────────────────────────────
   const toggleActive = useCallback(
     async (
       adminId: string,
@@ -228,73 +220,72 @@ export function useAdmins() {
       adminName: string,
     ): Promise<{ success: boolean; error?: string }> => {
       if (!user) return { success: false, error: "Not authenticated." };
+      const nextState = !currentState;
       try {
         await updateDoc(doc(db, "admins", adminId), {
-          isActive: !currentState,
+          isActive:  nextState,
           updatedAt: serverTimestamp(),
           updatedBy: user.uid,
         });
 
         await writeLog({
-          actorId: user.uid,
-          actorName: user.displayName ?? "Unknown",
-          action: "toggled_admin_status",
-          targetId: adminId,
-          targetName: adminName,
-          meta: { from: currentState, to: !currentState },
+          ...actor(),
+          module:      "admin_management",
+          action:      "toggled_admin_status",
+          description: buildDescription.toggledAdminStatus(adminName, nextState),
+          targetId:    adminId,
+          targetName:  adminName,
+          affectedFiles: [`admins/${adminId}`],
+          meta: { from: currentState, to: nextState },
         });
 
         await fetchAdmins();
         return { success: true };
       } catch (err: any) {
-        return {
-          success: false,
-          error: err.message ?? "Failed to toggle status.",
-        };
+        return { success: false, error: err.message ?? "Failed to toggle status." };
       }
     },
-    [user, fetchAdmins],
+    [user, actor, fetchAdmins],
   );
 
-  // ── Delete admin ───────────────────────────────────────────────────────
+  // ── deleteAdmin ────────────────────────────────────────────────────────────
   const deleteAdmin = useCallback(
     async (
       adminId: string,
       adminName: string,
     ): Promise<{ success: boolean; error?: string }> => {
       if (!user) return { success: false, error: "Not authenticated." };
-      if (adminId === user.uid) {
-        return { success: false, error: "You cannot delete your own account." };
-      }
+      if (adminId === user.uid) return { success: false, error: "You cannot delete your own account." };
+
       try {
         await deleteDoc(doc(db, "admins", adminId));
 
         await writeLog({
-          actorId: user.uid,
-          actorName: user.displayName ?? "Unknown",
-          action: "deleted_admin",
-          targetId: adminId,
-          targetName: adminName,
+          ...actor(),
+          module:      "admin_management",
+          action:      "deleted_admin",
+          description: buildDescription.deletedAdmin(adminName),
+          targetId:    adminId,
+          targetName:  adminName,
+          affectedFiles: [`admins/${adminId}`],
         });
 
         await fetchAdmins();
         return { success: true };
       } catch (err: any) {
-        return {
-          success: false,
-          error: err.message ?? "Failed to delete admin.",
-        };
+        return { success: false, error: err.message ?? "Failed to delete admin." };
       }
     },
-    [user, fetchAdmins],
+    [user, actor, fetchAdmins],
   );
 
-  // ── Update permissions only ────────────────────────────────────────────
+  // ── updatePermissions ──────────────────────────────────────────────────────
   const updatePermissions = useCallback(
     async (
       adminId: string,
       permissions: ModuleKey[],
       adminName: string,
+      previousPermissions?: ModuleKey[],
     ): Promise<{ success: boolean; error?: string }> => {
       if (!user) return { success: false, error: "Not authenticated." };
       try {
@@ -305,24 +296,23 @@ export function useAdmins() {
         });
 
         await writeLog({
-          actorId: user.uid,
-          actorName: user.displayName ?? "Unknown",
-          action: "updated_permissions",
-          targetId: adminId,
-          targetName: adminName,
-          meta: { permissions },
+          ...actor(),
+          module:      "admin_management",
+          action:      "updated_permissions",
+          description: buildDescription.updatedPermissions(adminName, permissions),
+          targetId:    adminId,
+          targetName:  adminName,
+          affectedFiles: [`admins/${adminId}`],
+          meta: { from: previousPermissions ?? null, to: permissions },
         });
 
         await fetchAdmins();
         return { success: true };
       } catch (err: any) {
-        return {
-          success: false,
-          error: err.message ?? "Failed to update permissions.",
-        };
+        return { success: false, error: err.message ?? "Failed to update permissions." };
       }
     },
-    [user, fetchAdmins],
+    [user, actor, fetchAdmins],
   );
 
   return {

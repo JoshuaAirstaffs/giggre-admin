@@ -1,0 +1,576 @@
+"use client";
+
+// ─── hooks/useContent.ts ──────────────────────────────────────────────────────
+//
+// Data hook for the Content Management feature.
+//
+// Visibility rule (replaces the old `published` boolean field):
+//   sortNumber === 0  →  item is hidden (not displayed in the app)
+//   sortNumber  > 0  →  item is visible and ordered by that value (ascending)
+//
+// The `published` field no longer exists on any document.
+// The single source of truth for both visibility and ordering is `sortNumber`.
+//
+// Public helper:
+//   isVisible(item)  →  item.sortNumber > 0
+//
+// The hook exposes `toggleVisibility` (replaces `togglePublish`).
+// When hiding:  sets sortNumber to 0, stores the previous value in
+//               `lastSortNumber` so the UI can restore it if desired.
+// When showing: restores `lastSortNumber` if available, otherwise defaults to 1.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { useState, useCallback } from "react";
+import {
+  collection,
+  doc,
+  getDocs,
+  setDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  getDoc,
+  serverTimestamp,
+} from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import { writeLog, buildDescription } from "@/lib/activitylog";
+import type { ContentSectionKey, LogPayload } from "@/lib/activitylog";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface BaseItem {
+  id: string;
+  /** Visibility + ordering in one field.
+   *  0  → hidden (not shown in the app)
+   *  >0 → visible, ordered ascending by this value */
+  sortNumber: number;
+  /**
+   * Preserved whenever the item is hidden (sortNumber set to 0).
+   * Restored when the item is made visible again so ordering is not lost.
+   * Never stored on new items — only written by toggleVisibility.
+   */
+  lastSortNumber?: number;
+  dateCreated: Date | null;
+  dateUpdated: Date | null;
+}
+
+export interface CarouselItem extends BaseItem {
+  picture?: string;
+  author: string;
+  text: string;
+}
+
+export interface UpdateItem extends BaseItem {
+  category: string;
+  title: string;
+  body: string;
+  sortNumberByCategory?: number;
+}
+
+export interface AboutItem extends BaseItem {
+  title: string;
+  body: string;
+}
+
+export interface TermsItem extends BaseItem {
+  title: string;
+  body: string;
+}
+
+export interface PrivacyItem extends BaseItem {
+  title: string;
+  body: string;
+}
+
+export interface FaqItem extends BaseItem {
+  category: string;
+  title: string;
+  body: string;
+  sortNumberByCategory?: number;
+}
+
+export type ContentItem =
+  | CarouselItem
+  | UpdateItem
+  | AboutItem
+  | TermsItem
+  | PrivacyItem
+  | FaqItem;
+
+/**
+ * Options stored flat on the section root document alongside `lastUpdated`.
+ * Path: app_content/{sectionKey}
+ */
+export interface SectionOptions {
+  sortMode?: "manual" | "newest" | "oldest";
+  maxVisibleItems?: number;
+  // carousel_items only
+  autoplay?: boolean;
+  transitionInterval?: number;
+  showArrows?: boolean;
+  showDots?: boolean;
+  loop?: boolean;
+}
+
+export interface SectionData {
+  items: ContentItem[];
+  options: SectionOptions;
+  lastUpdated: Date | null;
+}
+
+export interface ActorInfo {
+  actorId: string;
+  actorName: string;
+  actorEmail: string;
+}
+
+// ─── Visibility helper (single definition, used everywhere) ───────────────────
+
+/**
+ * An item is visible when its sortNumber is greater than zero.
+ * sortNumber === 0 means the item exists in the database but is hidden from
+ * the app.  There is no separate `published` field.
+ */
+export function isVisible(item: Pick<BaseItem, "sortNumber">): boolean {
+  return item.sortNumber > 0;
+}
+
+// ─── Path helpers ─────────────────────────────────────────────────────────────
+
+export function itemPath(sectionKey: ContentSectionKey, itemId: string): string {
+  return `app_content/${sectionKey}/items/${itemId}`;
+}
+
+export function sectionPath(sectionKey: ContentSectionKey): string {
+  return `app_content/${sectionKey}`;
+}
+
+// ─── Section helpers ──────────────────────────────────────────────────────────
+
+export function hasCategories(key: ContentSectionKey): boolean {
+  return key === "updates" || key === "help_faq";
+}
+
+export function getItemTitle(
+  item: Partial<ContentItem>,
+  sectionKey: ContentSectionKey,
+): string {
+  if ("title" in item && (item as any).title) return (item as any).title;
+  if ("text"  in item) return (item as CarouselItem).text?.slice(0, 60) ?? "Untitled";
+  return "Untitled";
+}
+
+/**
+ * Default field values for a new item.
+ * Note: sortNumber defaults to 1 so a freshly created item is immediately
+ * visible. The form lets the user change it before saving.
+ */
+export function emptyItemForSection(key: ContentSectionKey): Partial<ContentItem> {
+  // sortNumber: 1 → new items are visible by default
+  const base = { sortNumber: 1 };
+  switch (key) {
+    case "carousel_items":
+      return { ...base, picture: "", author: "", text: "" };
+    case "updates":
+      return { ...base, category: "", title: "", body: "" };
+    case "about_giggre":
+      return { ...base, title: "", body: "" };
+    case "terms_and_conditions":
+      return { ...base, title: "", body: "" };
+    case "privacy":
+      return { ...base, title: "", body: "" };
+    case "help_faq":
+      return { ...base, category: "", title: "", body: "" };
+  }
+}
+
+// ─── Default section options ──────────────────────────────────────────────────
+
+const DEFAULT_OPTIONS: SectionOptions = {
+  sortMode: "manual",
+  maxVisibleItems: 0,
+};
+
+const DEFAULT_CAROUSEL_OPTIONS: SectionOptions = {
+  ...DEFAULT_OPTIONS,
+  autoplay: true,
+  transitionInterval: 3000,
+  showArrows: true,
+  showDots: true,
+  loop: true,
+};
+
+/** Fields that belong to SectionOptions (keeps them separate from metadata). */
+const OPTION_FIELDS = new Set<string>([
+  "sortMode",
+  "maxVisibleItems",
+  "autoplay",
+  "transitionInterval",
+  "showArrows",
+  "showDots",
+  "loop",
+]);
+
+function extractOptions(data: Record<string, any>): SectionOptions {
+  const opts: SectionOptions = {};
+  for (const key of OPTION_FIELDS) {
+    if (key in data) (opts as any)[key] = data[key];
+  }
+  return opts;
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
+
+export function useContent(actor: ActorInfo) {
+  const [sectionData, setSectionData] = useState<
+    Partial<Record<ContentSectionKey, SectionData>>
+  >({});
+  const [loading,    setLoading]    = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  // ── Internal log helper ──────────────────────────────────────────────────
+  // `log` accepts only the action-specific fields (LogPayload).
+  // The actor fields are injected here so every call-site stays clean.
+  const log = useCallback(
+    (params: LogPayload) => writeLog({ ...actor, ...params }),
+    [actor],
+  );
+
+  // ── fetchAll ─────────────────────────────────────────────────────────────
+  const fetchAll = useCallback(async (sectionKeys: ContentSectionKey[]) => {
+    setLoading(true);
+    try {
+      const result: Partial<Record<ContentSectionKey, SectionData>> = {};
+
+      await Promise.all(
+        sectionKeys.map(async (key) => {
+          const sectionRef  = doc(db, "app_content", key);
+          const sectionSnap = await getDoc(sectionRef);
+
+          // Bootstrap missing section documents with defaults
+          if (!sectionSnap.exists()) {
+            const defaults =
+              key === "carousel_items" ? DEFAULT_CAROUSEL_OPTIONS : DEFAULT_OPTIONS;
+            await setDoc(sectionRef, { ...defaults, lastUpdated: serverTimestamp() });
+          }
+
+          // Fetch items sub-collection
+          const itemsSnap = await getDocs(
+            collection(db, "app_content", key, "items"),
+          );
+
+          const items: ContentItem[] = itemsSnap.docs
+            .map((d) => {
+              const data = d.data();
+              return {
+                id: d.id,
+                ...data,
+                // Coerce to number defensively — older docs may have strings
+                sortNumber:     Number(data.sortNumber     ?? 0),
+                lastSortNumber: data.lastSortNumber != null
+                  ? Number(data.lastSortNumber)
+                  : undefined,
+                dateCreated: data.dateCreated?.toDate?.() ?? null,
+                dateUpdated: data.dateUpdated?.toDate?.() ?? null,
+              } as ContentItem;
+            })
+            .sort((a, b) => {
+              // Hidden items (sort = 0) go to the bottom of the admin list
+              const sa = a.sortNumber;
+              const sb = b.sortNumber;
+              if (sa === 0 && sb === 0) return 0;
+              if (sa === 0) return 1;
+              if (sb === 0) return -1;
+              return sa - sb;
+            });
+
+          // Read options from the flat root doc
+          const rawData       = sectionSnap.exists() ? sectionSnap.data() : {};
+          const storedOptions = extractOptions(rawData);
+          const fallback      = key === "carousel_items"
+            ? DEFAULT_CAROUSEL_OPTIONS
+            : DEFAULT_OPTIONS;
+          const options: SectionOptions = Object.keys(storedOptions).length
+            ? storedOptions
+            : fallback;
+
+          result[key] = {
+            items,
+            options,
+            lastUpdated: rawData?.lastUpdated?.toDate?.() ?? null,
+          };
+        }),
+      );
+
+      setSectionData(result);
+    } catch (err) {
+      console.error("[useContent] fetchAll failed:", err);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // ── createItem ───────────────────────────────────────────────────────────
+  const createItem = useCallback(
+    async (
+      sectionKey:   ContentSectionKey,
+      sectionLabel: string,
+      form:         Partial<ContentItem>,
+    ): Promise<{ success: boolean; error?: string }> => {
+      setSubmitting(true);
+      try {
+        // Ensure sortNumber is a clean number; strip lastSortNumber from creates
+        const { lastSortNumber: _unused, ...cleanForm } = form as any;
+        const payload = {
+          ...cleanForm,
+          sortNumber:  Number(cleanForm.sortNumber ?? 1),
+          dateCreated: serverTimestamp(),
+          dateUpdated: serverTimestamp(),
+        };
+
+        const docRef = await addDoc(
+          collection(db, "app_content", sectionKey, "items"),
+          payload,
+        );
+
+        await updateDoc(doc(db, "app_content", sectionKey), {
+          lastUpdated: serverTimestamp(),
+        });
+
+        const title = getItemTitle({ ...form, id: docRef.id }, sectionKey);
+
+        await log({
+          module:      "content_management",
+          action:      "content_created",
+          description: buildDescription.contentCreated(sectionLabel, title),
+          targetSection: sectionKey,
+          targetId:    docRef.id,
+          targetName:  title,
+          affectedFiles: [itemPath(sectionKey, docRef.id), sectionPath(sectionKey)],
+          meta: { other: { ...payload } },
+        });
+
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message ?? "Failed to create item." };
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [log],
+  );
+
+  // ── updateItem ───────────────────────────────────────────────────────────
+  const updateItem = useCallback(
+    async (
+      sectionKey:   ContentSectionKey,
+      sectionLabel: string,
+      item:         ContentItem,
+      form:         Partial<ContentItem>,
+    ): Promise<{ success: boolean; error?: string }> => {
+      setSubmitting(true);
+      try {
+        const previous = { ...item };
+        const payload  = {
+          ...form,
+          sortNumber:  Number((form as any).sortNumber ?? item.sortNumber),
+          dateUpdated: serverTimestamp(),
+        };
+
+        await updateDoc(
+          doc(db, "app_content", sectionKey, "items", item.id),
+          payload,
+        );
+
+        await updateDoc(doc(db, "app_content", sectionKey), {
+          lastUpdated: serverTimestamp(),
+        });
+
+        const title = getItemTitle(item, sectionKey);
+
+        await log({
+          module:      "content_management",
+          action:      "content_updated",
+          description: buildDescription.contentUpdated(sectionLabel, title),
+          targetSection: sectionKey,
+          targetId:    item.id,
+          targetName:  title,
+          affectedFiles: [itemPath(sectionKey, item.id), sectionPath(sectionKey)],
+          meta: { from: previous, to: form },
+        });
+
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message ?? "Failed to update item." };
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [log],
+  );
+
+  // ── deleteItem ───────────────────────────────────────────────────────────
+  const deleteItem = useCallback(
+    async (
+      sectionKey:   ContentSectionKey,
+      sectionLabel: string,
+      item:         ContentItem,
+    ): Promise<{ success: boolean; error?: string }> => {
+      setSubmitting(true);
+      try {
+        const snapshot = { ...item };
+        const title    = getItemTitle(item, sectionKey);
+
+        await deleteDoc(doc(db, "app_content", sectionKey, "items", item.id));
+
+        await updateDoc(doc(db, "app_content", sectionKey), {
+          lastUpdated: serverTimestamp(),
+        });
+
+        await log({
+          module:      "content_management",
+          action:      "content_deleted",
+          description: buildDescription.contentDeleted(sectionLabel, title),
+          targetSection: sectionKey,
+          targetId:    item.id,
+          targetName:  title,
+          affectedFiles: [itemPath(sectionKey, item.id), sectionPath(sectionKey)],
+          meta: { from: snapshot },
+        });
+
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message ?? "Failed to delete item." };
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [log],
+  );
+
+  // ── toggleVisibility ─────────────────────────────────────────────────────
+  //
+  // Replaces togglePublish.  Visibility is controlled entirely by sortNumber:
+  //
+  //   Hiding  (visible → hidden):
+  //     • Saves current sortNumber into lastSortNumber  (so it can be restored)
+  //     • Sets sortNumber to 0
+  //
+  //   Showing (hidden → visible):
+  //     • Restores lastSortNumber if it exists and is > 0
+  //     • Falls back to 1 if lastSortNumber is absent or 0
+  //     • Clears lastSortNumber (no longer needed)
+  const toggleVisibility = useCallback(
+    async (
+      sectionKey:   ContentSectionKey,
+      sectionLabel: string,
+      item:         ContentItem,
+    ): Promise<{ success: boolean; error?: string }> => {
+      const currentlyVisible = isVisible(item);
+      const title = getItemTitle(item, sectionKey);
+
+      let patch: Record<string, any>;
+
+      if (currentlyVisible) {
+        // Hide: save current position, zero out sort
+        patch = {
+          lastSortNumber: item.sortNumber,
+          sortNumber:     0,
+          dateUpdated:    serverTimestamp(),
+        };
+      } else {
+        // Show: restore last known position (fall back to 1)
+        const restored =
+          item.lastSortNumber != null && item.lastSortNumber > 0
+            ? item.lastSortNumber
+            : 1;
+        patch = {
+          sortNumber:     restored,
+          lastSortNumber: null,   // clear — no longer needed
+          dateUpdated:    serverTimestamp(),
+        };
+      }
+
+      try {
+        await updateDoc(
+          doc(db, "app_content", sectionKey, "items", item.id),
+          patch,
+        );
+
+        await updateDoc(doc(db, "app_content", sectionKey), {
+          lastUpdated: serverTimestamp(),
+        });
+
+        await log({
+          module:      "content_management",
+          action:      currentlyVisible ? "content_unpublished" : "content_published",
+          description: currentlyVisible
+            ? buildDescription.contentUnpublished(sectionLabel, title)
+            : buildDescription.contentPublished(sectionLabel, title),
+          targetSection: sectionKey,
+          targetId:    item.id,
+          targetName:  title,
+          affectedFiles: [itemPath(sectionKey, item.id)],
+          meta: {
+            from: { sortNumber: item.sortNumber },
+            to:   { sortNumber: patch.sortNumber },
+          },
+        });
+
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message ?? "Failed to toggle visibility." };
+      }
+    },
+    [log],
+  );
+
+  // ── saveSettings ─────────────────────────────────────────────────────────
+  const saveSettings = useCallback(
+    async (
+      sectionKey:      ContentSectionKey,
+      sectionLabel:    string,
+      opts:            SectionOptions,
+      previousOptions: SectionOptions,
+    ): Promise<{ success: boolean; error?: string }> => {
+      setSubmitting(true);
+      try {
+        await updateDoc(doc(db, "app_content", sectionKey), {
+          ...opts,
+          lastUpdated: serverTimestamp(),
+        });
+
+        await log({
+          module:      "content_management",
+          action:      "content_settings_updated",
+          description: buildDescription.contentSettingsUpdated(sectionLabel),
+          targetSection: sectionKey,
+          targetId:    null,
+          targetName:  sectionLabel,
+          affectedFiles: [sectionPath(sectionKey)],
+          meta: { from: previousOptions, to: opts },
+        });
+
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message ?? "Failed to save settings." };
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [log],
+  );
+
+  return {
+    sectionData,
+    loading,
+    submitting,
+    fetchAll,
+    createItem,
+    updateItem,
+    deleteItem,
+    toggleVisibility,   // replaces togglePublish
+    saveSettings,
+  };
+}
