@@ -132,11 +132,6 @@ export function getItemTitle(
   return "Untitled";
 }
 
-/**
- * Default field values for a new item.
- * Note: sortNumber defaults to 1 so a freshly created item is immediately
- * visible. The form lets the user change it before saving.
- */
 export function emptyItemForSection(key: ContentSectionKey): Partial<ContentItem> {
   // sortNumber: 1 → new items are visible by default
   const base = { sortNumber: 1 };
@@ -172,7 +167,6 @@ const DEFAULT_CAROUSEL_OPTIONS: SectionOptions = {
   loop: true,
 };
 
-/** Fields that belong to SectionOptions (keeps them separate from metadata). */
 const OPTION_FIELDS = new Set<string>([
   "sortMode",
   "maxVisibleItems",
@@ -219,14 +213,12 @@ export function useContent(actor: ActorInfo) {
           const sectionRef  = doc(db, "app_content", key);
           const sectionSnap = await getDoc(sectionRef);
 
-          // Bootstrap missing section documents with defaults
           if (!sectionSnap.exists()) {
             const defaults =
               key === "carousel_items" ? DEFAULT_CAROUSEL_OPTIONS : DEFAULT_OPTIONS;
             await setDoc(sectionRef, { ...defaults, lastUpdated: serverTimestamp() });
           }
 
-          // Fetch items sub-collection
           const itemsSnap = await getDocs(
             collection(db, "app_content", key, "items"),
           );
@@ -237,7 +229,6 @@ export function useContent(actor: ActorInfo) {
               return {
                 id: d.id,
                 ...data,
-                // Coerce to number defensively — older docs may have strings
                 sortNumber:     Number(data.sortNumber     ?? 0),
                 lastSortNumber: data.lastSortNumber != null
                   ? Number(data.lastSortNumber)
@@ -457,11 +448,54 @@ export function useContent(actor: ActorInfo) {
     [log],
   );
 
+  const fetchSection = useCallback(async (key: ContentSectionKey): Promise<SectionData> => {
+    const sectionRef = doc(db, "app_content", key);
+    const sectionSnap = await getDoc(sectionRef);
+
+    if (!sectionSnap.exists()) {
+      const defaults = key === "carousel_items" ? DEFAULT_CAROUSEL_OPTIONS : DEFAULT_OPTIONS;
+      await setDoc(sectionRef, { ...defaults, lastUpdated: serverTimestamp() });
+    }
+
+    const itemsSnap = await getDocs(collection(db, "app_content", key, "items"));
+
+    const items: ContentItem[] = itemsSnap.docs
+      .map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          ...data,
+          sortNumber: Number(data.sortNumber ?? 0),
+          lastSortNumber: data.lastSortNumber != null ? Number(data.lastSortNumber) : undefined,
+          dateCreated: data.dateCreated?.toDate?.() ?? null,
+          dateUpdated: data.dateUpdated?.toDate?.() ?? null,
+        } as ContentItem;
+      })
+      .sort((a, b) => {
+        const sa = a.sortNumber, sb = b.sortNumber;
+        if (sa === 0 && sb === 0) return 0;
+        if (sa === 0) return 1;
+        if (sb === 0) return -1;
+        return sa - sb;
+      });
+
+    const rawData = sectionSnap.exists() ? sectionSnap.data() : {};
+    const storedOptions = extractOptions(rawData);
+    const fallback = key === "carousel_items" ? DEFAULT_CAROUSEL_OPTIONS : DEFAULT_OPTIONS;
+
+    return {
+      items,
+      options: Object.keys(storedOptions).length ? storedOptions : fallback,
+      lastUpdated: rawData?.lastUpdated?.toDate?.() ?? null,
+    };
+  }, []);
+
   return {
     sectionData,
     loading,
     submitting,
     fetchAll,
+    fetchSection,
     createItem,
     updateItem,
     deleteItem,
