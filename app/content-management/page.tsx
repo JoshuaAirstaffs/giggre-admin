@@ -20,7 +20,6 @@ import {
   type ContentItem,
   type SectionOptions,
   type SectionData,
-  type CarouselItem,
 } from "@/hooks/useContent";
 import { AboutGiggrePanel } from "@/components/ui/content/AboutGiggrePanel";
 import type { ContentSectionKey } from "@/lib/activitylog";
@@ -119,9 +118,8 @@ function ItemForm({
     ...initial,
   });
 
-  const set = (key: string, value: any) => {
+  const set = (key: string, value: any) =>
     setForm((prev: any) => ({ ...prev, [key]: value }));
-  };
 
   // Check if current sort number is already taken (but not by this item if editing)
   const currentSortTaken = 
@@ -173,6 +171,14 @@ function ItemForm({
             <label className="if-label">Image Name *</label>
             <input className="if-input" value={form.imageName ?? ""} onChange={(e) => set("imageName", e.target.value)} disabled={loading} placeholder="Display name for this carousel item…" />
           </div>
+          {/* <div>
+            <label className="if-label">Author</label>
+            <input className="if-input" value={form.author ?? ""} onChange={(e) => set("author", e.target.value)} disabled={loading} placeholder="Author name…" />
+          </div>
+          <div>
+            <label className="if-label">Text *</label>
+            <textarea className="if-textarea" value={form.text ?? ""} onChange={(e) => set("text", e.target.value)} disabled={loading} placeholder="Carousel slide text…" />
+          </div> */}
         </>
       )}
       {hasCategories(sectionKey) && (
@@ -214,7 +220,6 @@ function ItemForm({
           )}
           <div className="if-sort-hint">{`0   = the content should not be displayed.`}</div>
           <div className="if-sort-hint">{`1+ = the content is visible and ordered accordingly.`}</div>
-        </div>
         </div>
         {hasCategories(sectionKey) && (
           <div>
@@ -311,21 +316,21 @@ function SectionPanel({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  if (sectionState.loading && !sectionState.data) return <SectionSkeleton />;
-  if (sectionState.error && !sectionState.data) return <SectionError error={sectionState.error} onRetry={onRefresh} />;
-
   // Get all taken sort numbers for carousel items (excluding 0 which means hidden)
   const takenSortNumbers = 
-    sectionKey === "carousel_items" 
-      ? (data?.items
-          ?.map(item => (item as any).sortNumber)
-          ?.filter(n => n > 0) ?? [])
+    sectionKey === "carousel_items" && sectionState.data
+      ? sectionState.data.items
+          .map(item => (item as any).sortNumber)
+          .filter(n => n > 0)
       : [];
+
+  if (sectionState.loading && !sectionState.data) return <SectionSkeleton />;
+  if (sectionState.error && !sectionState.data) return <SectionError error={sectionState.error} onRetry={onRefresh} />;
   if (!sectionState.data) return <SectionSkeleton />;
 
   const data = sectionState.data;
 
-  const filteredItems = (data?.items ?? []).filter((item) => {
+  const filteredItems = data.items.filter((item) => {
     if (!search) return true;
     const q = search.toLowerCase();
     return (
@@ -458,8 +463,8 @@ function SectionPanel({
               <RefreshCw size={11} className="spin-anim" /> Refreshing…
             </span>
           )}
-          <Badge variant="blue">{data?.items.length ?? 0} items</Badge>
-          {data?.lastUpdated && (
+          <Badge variant="blue">{data.items.length} items</Badge>
+          {data.lastUpdated && (
             <span style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
               {formatDate(data.lastUpdated)}
             </span>
@@ -467,89 +472,152 @@ function SectionPanel({
         </div>
       </div>
 
-      {/* Expanded body */}
-      <div className="section-body">
-        <div className="section-toolbar">
-          <div className="section-search">
-            <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ color: "var(--text-muted)", flexShrink: 0 }}>
-              <circle cx="11" cy="11" r="8" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35" />
-            </svg>
-            <input
-              placeholder="Search items…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              />
-              {search && (
-                <button style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex" }} onClick={() => setSearch("")}>
-                  <X size={11} />
-                </button>
-              )}
-            </div>
-            <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              {sectionKey !== "carousel_items" && (
-                <button className="cm-icon-btn" title="Section settings" onClick={() => setSettingsOpen(true)}>
-                  <Settings size={13} />
-                </button>
-              )}
-              <Button variant="primary" size="sm" icon={Plus} onClick={() => setCreating(true)}>
-                Add Item
-              </Button>
-            </div>
-          </div>
+      {/* Toolbar */}
+      <div className="sp-toolbar">
+        <div className="sp-search">
+          <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ color: "var(--text-muted)", flexShrink: 0 }}>
+            <circle cx="11" cy="11" r="8" /><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35" />
+          </svg>
+          <input placeholder="Search items…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          {search && (
+            <button style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex" }} onClick={() => setSearch("")}>
+              <X size={11} />
+            </button>
+          )}
+        </div>
+        <button
+          className="cm-icon-btn"
+          title="Refresh this section"
+          onClick={onRefresh}
+          disabled={sectionState.loading}
+        >
+          <RefreshCw size={13} className={sectionState.loading ? "spin-anim" : ""} />
+        </button>
+        {sectionKey !== "carousel_items" && (
+          <button className="cm-icon-btn" title="Section settings" onClick={() => setSettingsOpen(true)}>
+            <Settings size={13} />
+          </button>
+        )}
+        <Button variant="primary" size="sm" icon={Plus} onClick={() => setCreating(true)}>
+          Add Item
+        </Button>
+      </div>
 
-          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-md)", overflow: "hidden" }}>
-            <table className="cm-table">
-              <thead>
-                <tr>
-                  {hasCategories(sectionKey) && <th>Category</th>}
-                  <th>Content</th>
-                  <th>Sort #</th>
-                  <th>Status</th>
-                  <th>Updated</th>
-                  <th>Actions</th>
+      {/* Table */}
+      <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-md)", overflow: "hidden" }}>
+        <table className="cm-table">
+          <thead>
+            <tr>
+              {hasCategories(sectionKey) && <th>Category</th>}
+              <th>Content</th>
+              <th>Sort #</th>
+              <th>Status</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredItems.length === 0 ? (
+              <tr>
+                <td colSpan={hasCategories(sectionKey) ? 6 : 5} className="cm-empty">
+                  No items found.{!search && ` Click "Add Item" to create the first one.`}
+                </td>
+              </tr>
+            ) : (
+              filteredItems.map((item) => (
+                <tr key={item.id}>
+                  {hasCategories(sectionKey) && (
+                    <td><Badge variant="blue">{(item as any).category || "—"}</Badge></td>
+                  )}
+                  <td>
+                    <div className="cm-title">{getItemTitle(item, sectionKey)}</div>
+                    {/* {("body" in item && (item as any).body) && <div className="cm-body">{(item as any).body}</div>}
+                    {("text" in item && (item as any).text) && <div className="cm-body">{(item as any).text}</div>} */}
+                  </td>
+                  <td style={{ fontFamily: "'Space Mono', monospace" }}>{item.sortNumber}</td>
+                  <td>
+                    <Badge variant={item.sortNumber > 0 ? "green" : "amber"} dot>
+                      {item.sortNumber > 0 ? "Published" : "Hidden"}
+                    </Badge>
+                  </td>
+                  <td>{formatDate(item.dateUpdated)}</td>
+                  <td>
+                    <div className="cm-actions">
+                      {/* <button
+                            className="cm-icon-btn"
+                            title={item.published !== false ? "Unpublish" : "Publish"}
+                            onClick={() => handleTogglePublish(item)}
+                          >
+                            {item.published !== false ? <EyeOff size={12} /> : <Eye size={12} />}
+                          </button> */}
+                      <button className="cm-icon-btn" title="Edit" onClick={() => setEditing(item)}>
+                        <Edit2 size={12} />
+                      </button>
+                      <button className="cm-icon-btn danger" title="Delete" onClick={() => setDeleting(item)}>
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {filteredItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="cm-empty">
-                      No items found.{!search && ` Click "Add Item" to create the first one.`}
-                    </td>
-                  </tr>
-                ) : (
-                  filteredItems.map((item) => (
-                    <tr key={item.id}>
-                      {hasCategories(sectionKey) && (
-                        <td><Badge variant="blue">{(item as any).category || "—"}</Badge></td>
-                      )}
-                      <td>
-                        <div className="cm-title">{getItemTitle(item, sectionKey)}</div>
-                        {sectionKey === "carousel_items" && (item as CarouselItem).picture && (
-                          <div className="cm-body">{(item as CarouselItem).picture}</div>
-                        )}
-                        {("body" in item && (item as any).body) && (
-                          <div className="cm-body">{(item as any).body}</div>
-                        )}
-                      </td>
-                      
-                      {/* {sectionKey === "terms_and_conditions" && (
-                        <td style={{ fontFamily: "'Space Mono', monospace", fontSize: 11 }}>
-                          {(item as any).numberedSection || "—"}
-                        </td>
-                      )} */}
-                      <td style={{ fontFamily: "'Space Mono', monospace" }}>
-                        {item.sortNumber}
-                      </td>
-                      <td>
-                        <Badge variant={item.sortNumber > 0 ? "green" : "amber"} dot>
-                          {item.sortNumber > 0 ? "Published" : "Hidden"}
-                        </Badge>
-                      </td>
-                      <td>{formatDate(item.dateUpdated)}</td>
-                      <td>
-                        <div className="cm-actions">
-                          {/* <button
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {sectionState.lastFetched && (
+        <div style={{ fontSize: 11, color: "var(--text-muted)", paddingTop: 8 }}>
+          Fetched {new Date(sectionState.lastFetched).toLocaleString("en-PH", {
+            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+          })}
+        </div>
+      )}
+
+      {/* Modals */}
+      <Modal open={creating} onClose={() => setCreating(false)} title={`Add Item — ${meta.label}`} size="md">
+        <ItemForm sectionKey={sectionKey} initial={emptyItemForSection(sectionKey)} onSubmit={handleCreate} loading={submitting} takenSortNumbers={takenSortNumbers} />
+      </Modal>
+
+      <Modal open={!!editing} onClose={() => setEditing(null)} title={`Edit Item — ${meta.label}`} size="md">
+        {editing && (
+          <ItemForm sectionKey={sectionKey} initial={editing} onSubmit={handleEdit} loading={submitting} isEdit takenSortNumbers={takenSortNumbers} />
+        )}
+      </Modal>
+
+      <ConfirmDialog
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        onConfirm={handleDelete}
+        title="Delete Item"
+        message={`Delete "${deleting ? getItemTitle(deleting, sectionKey) : ""}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+        loading={submitting}
+      />
+
+      <Modal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        title={`Settings — ${meta.label}`}
+        size="sm"
+        description="Configure display options for this section."
+      >
+        <SectionSettingsForm
+          sectionKey={sectionKey}
+          initial={data.options}
+          onSubmit={handleSaveSettings}
+          loading={submitting}
+        />
+      </Modal>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+export default function ContentManagementPage() {
+  useAuthGuard({ module: "content-management" });
+  const { user } = useAuth();
 
   const actor = {
     actorId: user?.uid ?? "",
