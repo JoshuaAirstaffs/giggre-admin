@@ -27,9 +27,8 @@ export interface BaseItem {
 }
 
 export interface CarouselItem extends BaseItem {
-  picture?: string;
-  author: string;
-  text: string;
+  picture: string; // Image URL (Firebase Storage or external URL)
+  imageName: string; // Name given by admin
 }
 
 export interface UpdateItem extends BaseItem {
@@ -128,7 +127,7 @@ export function getItemTitle(
   sectionKey: ContentSectionKey,
 ): string {
   if ("title" in item && (item as any).title) return (item as any).title;
-  if ("text"  in item) return (item as CarouselItem).text?.slice(0, 60) ?? "Untitled";
+  if ("imageName" in item) return (item as CarouselItem).imageName || "(No name)";
   return "Untitled";
 }
 
@@ -142,7 +141,7 @@ export function emptyItemForSection(key: ContentSectionKey): Partial<ContentItem
   const base = { sortNumber: 1 };
   switch (key) {
     case "carousel_items":
-      return { ...base, picture: "", author: "", text: "" };
+      return { ...base, picture: "", imageName: "" };
     case "updates":
       return { ...base, category: "", title: "", body: "" };
     case "about_giggre":
@@ -344,11 +343,34 @@ export function useContent(actor: ActorInfo) {
       setSubmitting(true);
       try {
         const previous = { ...item };
-        const payload  = {
-          ...form,
-          sortNumber:  Number((form as any).sortNumber ?? item.sortNumber),
-          dateUpdated: serverTimestamp(),
-        };
+        
+        // Build clean payload — only include content fields relevant to this section
+        const payload: Record<string, any> = {};
+        
+        // Add content fields based on section type
+        switch (sectionKey) {
+          case "carousel_items":
+            if ("picture" in form) payload.picture = form.picture;
+            if ("imageName" in form) payload.imageName = form.imageName;
+            break;
+          case "updates":
+          case "help_faq":
+            if ("category" in form) payload.category = form.category;
+            if ("title" in form) payload.title = form.title;
+            if ("body" in form) payload.body = form.body;
+            if ("sortNumberByCategory" in form) 
+              payload.sortNumberByCategory = Number((form as any).sortNumberByCategory ?? 0);
+            break;
+          default:
+            // about_giggre, terms_and_conditions, privacy
+            if ("title" in form) payload.title = form.title;
+            if ("body" in form) payload.body = form.body;
+            break;
+        }
+        
+        // Always include sortNumber
+        payload.sortNumber = Number((form as any).sortNumber ?? item.sortNumber);
+        payload.dateUpdated = serverTimestamp();
 
         await updateDoc(
           doc(db, "app_content", sectionKey, "items", item.id),

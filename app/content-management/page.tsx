@@ -17,6 +17,7 @@ import {
   type ContentItem,
   type SectionOptions,
   type SectionData,
+  type CarouselItem,
 } from "@/hooks/useContent";
 import type { ContentSectionKey } from "@/lib/activitylog";
 import {
@@ -63,24 +64,33 @@ function ItemForm({
   onSubmit,
   loading,
   isEdit,
+  takenSortNumbers = [],
 }: {
   sectionKey: ContentSectionKey;
   initial: Partial<ContentItem>;
   onSubmit: (data: Partial<ContentItem>) => void;
   loading: boolean;
   isEdit?: boolean;
+  takenSortNumbers?: number[];
 }) {
   const [form, setForm] = useState<any>({
     ...emptyItemForSection(sectionKey),
     ...initial,
   });
 
-  const set = (key: string, value: any) =>
+  const set = (key: string, value: any) => {
     setForm((prev: any) => ({ ...prev, [key]: value }));
+  };
+
+  // Check if current sort number is already taken (but not by this item if editing)
+  const currentSortTaken = 
+    sectionKey === "carousel_items" && 
+    form.sortNumber > 0 &&
+    takenSortNumbers.filter(n => n !== (isEdit ? initial.sortNumber : null)).includes(form.sortNumber);
 
   const canSubmit =
     sectionKey === "carousel_items"
-      ? !!form.text?.trim()
+      ? !!form.picture?.trim() && !!form.imageName?.trim() && !currentSortTaken
       : !!form.title?.trim();
 
   return (
@@ -114,19 +124,15 @@ function ItemForm({
       {sectionKey === "carousel_items" && (
         <>
           <div>
-            <label className="if-label">Picture</label>
+            <label className="if-label">Image URL *</label>
             <div className="if-upload" onClick={() => toast.info("Image upload", "Storage integration coming soon")}>
               <Upload size={16} /><span>Click to upload or paste URL below</span>
             </div>
-            <input className="if-input" style={{ marginTop: 8 }} placeholder="Or paste image URL…" value={form.picture ?? ""} onChange={(e) => set("picture", e.target.value)} disabled={loading} />
+            <input className="if-input" style={{ marginTop: 8 }} placeholder="Paste image URL (Firebase Storage or external)…" value={form.picture ?? ""} onChange={(e) => set("picture", e.target.value)} disabled={loading} />
           </div>
           <div>
-            <label className="if-label">Author</label>
-            <input className="if-input" value={form.author ?? ""} onChange={(e) => set("author", e.target.value)} disabled={loading} placeholder="Author name…" />
-          </div>
-          <div>
-            <label className="if-label">Text *</label>
-            <textarea className="if-textarea" value={form.text ?? ""} onChange={(e) => set("text", e.target.value)} disabled={loading} placeholder="Carousel slide text…" />
+            <label className="if-label">Image Name *</label>
+            <input className="if-input" value={form.imageName ?? ""} onChange={(e) => set("imageName", e.target.value)} disabled={loading} placeholder="Display name for this carousel item…" />
           </div>
         </>
       )}
@@ -162,7 +168,22 @@ function ItemForm({
       <div className="if-row">
         <div>
           <label className="if-label">Sort Number</label>
-          <input className="if-input" type="number" min={0} value={form.sortNumber ?? 0} onChange={(e) => set("sortNumber", parseInt(e.target.value) || 0)} disabled={loading} />
+          <input 
+            className="if-input" 
+            type="number" 
+            min={0} 
+            value={form.sortNumber ?? 0} 
+            onChange={(e) => set("sortNumber", parseInt(e.target.value) || 0)} 
+            disabled={loading}
+            style={{
+              borderColor: currentSortTaken ? "var(--red)" : undefined,
+            }}
+          />
+          {currentSortTaken && (
+            <div style={{ fontSize: 11, color: "var(--red)", marginTop: 4 }}>
+              ⚠️ This sort number is already taken. Please choose a different one.
+            </div>
+          )}
           <div className="if-sort-hint">{`0   = the content should not be displayed.`}</div>
           <div className="if-sort-hint">{`1+ = the content is visible and ordered accordingly.`}</div>
         </div>
@@ -282,6 +303,14 @@ function SectionPanel({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [search, setSearch] = useState("");
 
+  // Get all taken sort numbers for carousel items (excluding 0 which means hidden)
+  const takenSortNumbers = 
+    sectionKey === "carousel_items" 
+      ? data.items
+          .map(item => (item as any).sortNumber)
+          .filter(n => n > 0)
+      : [];
+
   const filteredItems = data.items.filter((item) => {
     if (!search) return true;
     const q = search.toLowerCase();
@@ -292,6 +321,14 @@ function SectionPanel({
   });
 
   const handleCreate = async (form: Partial<ContentItem>) => {
+    // Validate carousel sort number
+    if (sectionKey === "carousel_items" && (form.sortNumber ?? 0) > 0) {
+      if (takenSortNumbers.includes(form.sortNumber ?? 0)) {
+        toast.error("Invalid sort number", "This sort number is already taken");
+        return;
+      }
+    }
+    
     const result = await createItem(sectionKey, meta.label, form);
     if (result.success) {
       toast.success("Item created", meta.label);
@@ -304,6 +341,16 @@ function SectionPanel({
 
   const handleEdit = async (form: Partial<ContentItem>) => {
     if (!editing) return;
+    
+    // Validate carousel sort number
+    if (sectionKey === "carousel_items" && (form.sortNumber ?? 0) > 0) {
+      const sortNumberTaken = takenSortNumbers.filter(n => n !== editing.sortNumber).includes(form.sortNumber ?? 0);
+      if (sortNumberTaken) {
+        toast.error("Invalid sort number", "This sort number is already taken");
+        return;
+      }
+    }
+    
     const result = await updateItem(sectionKey, meta.label, editing, form);
     if (result.success) {
       toast.success("Item updated");
@@ -431,9 +478,11 @@ function SectionPanel({
               )}
             </div>
             <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              <button className="cm-icon-btn" title="Section settings" onClick={() => setSettingsOpen(true)}>
-                <Settings size={13} />
-              </button>
+              {sectionKey !== "carousel_items" && (
+                <button className="cm-icon-btn" title="Section settings" onClick={() => setSettingsOpen(true)}>
+                  <Settings size={13} />
+                </button>
+              )}
               <Button variant="primary" size="sm" icon={Plus} onClick={() => setCreating(true)}>
                 Add Item
               </Button>
@@ -467,11 +516,11 @@ function SectionPanel({
                       )}
                       <td>
                         <div className="cm-title">{getItemTitle(item, sectionKey)}</div>
+                        {sectionKey === "carousel_items" && (item as CarouselItem).picture && (
+                          <div className="cm-body">{(item as CarouselItem).picture}</div>
+                        )}
                         {("body" in item && (item as any).body) && (
                           <div className="cm-body">{(item as any).body}</div>
-                        )}
-                        {("text" in item && (item as any).text) && (
-                          <div className="cm-body">{(item as any).text}</div>
                         )}
                       </td>
                       
@@ -527,12 +576,12 @@ function SectionPanel({
 
       {/* Modals */}
       <Modal open={creating} onClose={() => setCreating(false)} title={`Add Item — ${meta.label}`} size="md">
-        <ItemForm sectionKey={sectionKey} initial={emptyItemForSection(sectionKey)} onSubmit={handleCreate} loading={submitting} />
+        <ItemForm sectionKey={sectionKey} initial={emptyItemForSection(sectionKey)} onSubmit={handleCreate} loading={submitting} takenSortNumbers={takenSortNumbers} />
       </Modal>
 
       <Modal open={!!editing} onClose={() => setEditing(null)} title={`Edit Item — ${meta.label}`} size="md">
         {editing && (
-          <ItemForm sectionKey={sectionKey} initial={editing} onSubmit={handleEdit} loading={submitting} isEdit />
+          <ItemForm sectionKey={sectionKey} initial={editing} onSubmit={handleEdit} loading={submitting} isEdit takenSortNumbers={takenSortNumbers} />
         )}
       </Modal>
 
