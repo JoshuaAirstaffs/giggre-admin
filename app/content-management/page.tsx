@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/context/AuthContext";
@@ -9,6 +9,9 @@ import Badge from "@/components/ui/Badge";
 import Modal from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/Modal";
 import { toast } from "@/components/ui/Toaster";
+import { TabBar } from "@/components/ui/TabBar";
+import { useTabs } from "@/hooks/useTabs";
+import { usePerSectionData } from "@/hooks/usePerSectionData";
 import {
   useContent,
   emptyItemForSection,
@@ -19,12 +22,14 @@ import {
   type SectionData,
   type CarouselItem,
 } from "@/hooks/useContent";
+import { AboutGiggrePanel } from "@/components/ui/content/AboutGiggrePanel";
 import type { ContentSectionKey } from "@/lib/activitylog";
 import {
-  Plus, Edit2, Trash2, Settings, ChevronDown, ChevronUp,
+  Plus, Edit2, Trash2, Settings,
   Image, HelpCircle, Shield, ScrollText, Info, RefreshCw,
-  Eye, EyeOff, X, Upload,
+  X, Upload, AlertCircle,
 } from "lucide-react";
+import type { SectionState } from "@/hooks/usePerSectionData";
 
 // ─── Section Config ───────────────────────────────────────────────────────────
 
@@ -35,15 +40,17 @@ const SECTIONS: {
   description: string;
   color: string;
 }[] = [
-  { key: "carousel_items",       label: "Carousel",           icon: Image,      description: "Home screen carousel slides",   color: "var(--blue)"   },
-  { key: "updates",              label: "Updates",            icon: RefreshCw,  description: "App update announcements",       color: "var(--green)"  },
-  { key: "about_giggre",         label: "About Giggre",       icon: Info,       description: "About page content sections",    color: "var(--purple)" },
-  { key: "terms_and_conditions", label: "Terms & Conditions", icon: ScrollText, description: "Terms and conditions sections",  color: "var(--amber)"  },
-  { key: "privacy",              label: "Privacy Policy",     icon: Shield,     description: "Privacy policy sections",        color: "var(--orange)" },
-  { key: "help_faq",             label: "Help / FAQ",         icon: HelpCircle, description: "Help center FAQ items",          color: "var(--red)"    },
-];
+    { key: "carousel_items",     label: "Carousel",           icon: Image,      description: "Home screen carousel slides",      color: "var(--blue)"   },
+    { key: "updates",            label: "Updates",            icon: RefreshCw,  description: "App update announcements",          color: "var(--green)"  },
+    { key: "about_giggre",       label: "About Giggre",       icon: Info,       description: "About page content sections",       color: "var(--purple)" },
+    { key: "terms_and_conditions", label: "Terms & Conditions", icon: ScrollText, description: "Terms and conditions sections",   color: "var(--amber)"  },
+    { key: "privacy",            label: "Privacy Policy",     icon: Shield,     description: "Privacy policy sections",           color: "var(--orange)" },
+    { key: "help_faq",           label: "Help / FAQ",         icon: HelpCircle, description: "Help center FAQ items",             color: "var(--red)"    },
+  ];
 
 const SECTION_KEYS = SECTIONS.map((s) => s.key);
+
+const ITEM_BASED_SECTIONS = SECTION_KEYS.filter((k) => k !== "about_giggre");
 
 function getSectionMeta(key: ContentSectionKey) {
   return SECTIONS.find((s) => s.key === key)!;
@@ -54,6 +61,40 @@ function formatDate(d: Date | null): string {
   return d.toLocaleDateString("en-PH", {
     month: "short", day: "numeric", year: "numeric",
   });
+}
+// ─── Skeleton & Error states ──────────────────────────────────────────────────
+
+function SectionSkeleton() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <style>{`
+        @keyframes skel-pulse { 0%,100% { opacity:.45 } 50% { opacity:.9 } }
+        .skel { background: var(--bg-elevated); border-radius: var(--radius-sm); animation: skel-pulse 1.4s ease-in-out infinite; }
+      `}</style>
+      <div style={{ display: "flex", gap: 12, paddingBottom: 8 }}>
+        <div className="skel" style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0 }} />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 7 }}>
+          <div className="skel" style={{ width: 130, height: 14 }} />
+          <div className="skel" style={{ width: 210, height: 11 }} />
+        </div>
+      </div>
+      <div className="skel" style={{ height: 36 }} />
+      {[1, 2, 3, 4].map((i) => (
+        <div key={i} className="skel" style={{ height: 46, opacity: 1 - i * 0.18 }} />
+      ))}
+    </div>
+  );
+}
+
+function SectionError({ error, onRetry }: { error: string; onRetry: () => void }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "52px 24px", gap: 10, textAlign: "center" }}>
+      <AlertCircle size={26} style={{ color: "var(--red)" }} />
+      <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)" }}>Failed to load section</div>
+      <div style={{ fontSize: 12, color: "var(--text-muted)", maxWidth: 280 }}>{error}</div>
+      <Button variant="secondary" size="sm" icon={RefreshCw} onClick={onRetry}>Retry</Button>
+    </div>
+  );
 }
 
 // ─── Item Form ────────────────────────────────────────────────────────────────
@@ -97,12 +138,10 @@ function ItemForm({
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <style>{`
         .if-label { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-muted); display: block; margin-bottom: 5px; }
-        .if-input, .if-textarea { width: 100%; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 12px; color: var(--text-primary); font-size: 13px; outline: none; font-family: inherit; transition: border-color 0.2s; }
+        .if-input, .if-textarea { width: 100%; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 12px; color: var(--text-primary); font-size: 13px; outline: none; font-family: inherit; transition: border-color 0.2s; box-sizing: border-box; }
         .if-input:focus, .if-textarea:focus { border-color: var(--blue); }
         .if-textarea { resize: vertical; min-height: 100px; line-height: 1.6; }
         .if-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .if-toggle-row { display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 8px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-        .if-toggle-row input { accent-color: var(--blue); width: 14px; height: 14px; cursor: pointer; }
         .if-sort-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
         .if-upload { width: 100%; height: 90px; background: var(--bg-elevated); border: 2px dashed var(--border); border-radius: var(--radius-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--text-muted); font-size: 12px; cursor: pointer; transition: border-color 0.2s; }
         .if-upload:hover { border-color: var(--blue); color: var(--blue); }
@@ -136,35 +175,24 @@ function ItemForm({
           </div>
         </>
       )}
-
       {hasCategories(sectionKey) && (
         <div>
           <label className="if-label">Category *</label>
           <input className="if-input" value={form.category ?? ""} onChange={(e) => set("category", e.target.value)} disabled={loading} placeholder="e.g. Feature, General…" />
         </div>
       )}
-{/* 
-      {sectionKey === "terms_and_conditions" && (
-        <div>
-          <label className="if-label">Section Number</label>
-          <input className="if-input" value={form.numberedSection ?? ""} onChange={(e) => set("numberedSection", e.target.value)} disabled={loading} placeholder="e.g. 1, 1.1, 2…" />
-        </div>
-      )} */}
-
       {sectionKey !== "carousel_items" && (
         <div>
           <label className="if-label">Title *</label>
           <input className="if-input" value={form.title ?? ""} onChange={(e) => set("title", e.target.value)} disabled={loading} placeholder="Title…" />
         </div>
       )}
-
       {sectionKey !== "carousel_items" && (
         <div>
           <label className="if-label">Body Text</label>
           <textarea className="if-textarea" style={{ minHeight: 140 }} value={form.body ?? ""} onChange={(e) => set("body", e.target.value)} disabled={loading} placeholder="Body content…" />
         </div>
       )}
-
       <div className="if-row">
         <div>
           <label className="if-label">Sort Number</label>
@@ -187,6 +215,7 @@ function ItemForm({
           <div className="if-sort-hint">{`0   = the content should not be displayed.`}</div>
           <div className="if-sort-hint">{`1+ = the content is visible and ordered accordingly.`}</div>
         </div>
+        </div>
         {hasCategories(sectionKey) && (
           <div>
             <label className="if-label">Sort# in Category</label>
@@ -194,7 +223,6 @@ function ItemForm({
           </div>
         )}
       </div>
-
       <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 4 }}>
         <Button variant="primary" size="sm" loading={loading} onClick={() => onSubmit(form)} disabled={!canSubmit || loading}>
           {isEdit ? "Save Changes" : "Create Item"}
@@ -204,7 +232,7 @@ function ItemForm({
   );
 }
 
-// ─── Settings Form ────────────────────────────────────────────────────────────
+// ─── Settings Form ────────────────────────────────────────────────
 
 function SectionSettingsForm({
   sectionKey,
@@ -218,8 +246,7 @@ function SectionSettingsForm({
   loading: boolean;
 }) {
   const [opts, setOpts] = useState<SectionOptions>({ ...initial });
-  const set = (key: string, value: any) =>
-    setOpts((prev) => ({ ...prev, [key]: value }));
+  const set = (key: string, value: any) => setOpts((p) => ({ ...p, [key]: value }));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -231,7 +258,6 @@ function SectionSettingsForm({
         .sf-toggle-label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
         .sf-toggle input { accent-color: var(--blue); width: 15px; height: 15px; cursor: pointer; }
       `}</style>
-
       <div>
         <label className="sf-label">Sort Mode</label>
         <select className="sf-select" value={opts.sortMode ?? "manual"} onChange={(e) => set("sortMode", e.target.value)}>
@@ -240,41 +266,24 @@ function SectionSettingsForm({
           <option value="oldest">Oldest First</option>
         </select>
       </div>
-
       <div>
         <label className="sf-label">Max Visible Items</label>
         <input className="sf-input" type="number" min={0} value={opts.maxVisibleItems ?? 0} onChange={(e) => set("maxVisibleItems", parseInt(e.target.value) || 0)} placeholder="0 = show all" />
       </div>
-
       {sectionKey === "carousel_items" && (
         <>
-          <label className="sf-toggle">
-            <span className="sf-toggle-label">Autoplay</span>
-            <input type="checkbox" checked={!!opts.autoplay} onChange={(e) => set("autoplay", e.target.checked)} />
-          </label>
+          <label className="sf-toggle"><span className="sf-toggle-label">Autoplay</span><input type="checkbox" checked={!!opts.autoplay} onChange={(e) => set("autoplay", e.target.checked)} /></label>
           <div>
             <label className="sf-label">Transition Interval (ms)</label>
             <input className="sf-input" type="number" min={500} step={500} value={opts.transitionInterval ?? 3000} onChange={(e) => set("transitionInterval", parseInt(e.target.value) || 3000)} />
           </div>
-          <label className="sf-toggle">
-            <span className="sf-toggle-label">Show Navigation Arrows</span>
-            <input type="checkbox" checked={!!opts.showArrows} onChange={(e) => set("showArrows", e.target.checked)} />
-          </label>
-          <label className="sf-toggle">
-            <span className="sf-toggle-label">Show Dots / Indicators</span>
-            <input type="checkbox" checked={!!opts.showDots} onChange={(e) => set("showDots", e.target.checked)} />
-          </label>
-          <label className="sf-toggle">
-            <span className="sf-toggle-label">Loop</span>
-            <input type="checkbox" checked={!!opts.loop} onChange={(e) => set("loop", e.target.checked)} />
-          </label>
+          <label className="sf-toggle"><span className="sf-toggle-label">Show Navigation Arrows</span><input type="checkbox" checked={!!opts.showArrows} onChange={(e) => set("showArrows", e.target.checked)} /></label>
+          <label className="sf-toggle"><span className="sf-toggle-label">Show Dots / Indicators</span><input type="checkbox" checked={!!opts.showDots} onChange={(e) => set("showDots", e.target.checked)} /></label>
+          <label className="sf-toggle"><span className="sf-toggle-label">Loop</span><input type="checkbox" checked={!!opts.loop} onChange={(e) => set("loop", e.target.checked)} /></label>
         </>
       )}
-
       <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 4 }}>
-        <Button variant="primary" size="sm" loading={loading} onClick={() => onSubmit(opts)}>
-          Save Settings
-        </Button>
+        <Button variant="primary" size="sm" loading={loading} onClick={() => onSubmit(opts)}>Save Settings</Button>
       </div>
     </div>
   );
@@ -284,34 +293,39 @@ function SectionSettingsForm({
 
 function SectionPanel({
   sectionKey,
-  data,
+  sectionState,
   onRefresh,
   content,
 }: {
   sectionKey: ContentSectionKey;
-  data: SectionData;
+  sectionState: SectionState;
   onRefresh: () => void;
   content: ReturnType<typeof useContent>;
 }) {
   const meta = getSectionMeta(sectionKey);
   const { submitting, createItem, updateItem, deleteItem, saveSettings } = content;
 
-  const [expanded, setExpanded] = useState(false);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ContentItem | null>(null);
   const [deleting, setDeleting] = useState<ContentItem | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [search, setSearch] = useState("");
 
+  if (sectionState.loading && !sectionState.data) return <SectionSkeleton />;
+  if (sectionState.error && !sectionState.data) return <SectionError error={sectionState.error} onRetry={onRefresh} />;
+
   // Get all taken sort numbers for carousel items (excluding 0 which means hidden)
   const takenSortNumbers = 
     sectionKey === "carousel_items" 
-      ? data.items
-          .map(item => (item as any).sortNumber)
-          .filter(n => n > 0)
+      ? (data?.items
+          ?.map(item => (item as any).sortNumber)
+          ?.filter(n => n > 0) ?? [])
       : [];
+  if (!sectionState.data) return <SectionSkeleton />;
 
-  const filteredItems = data.items.filter((item) => {
+  const data = sectionState.data;
+
+  const filteredItems = (data?.items ?? []).filter((item) => {
     if (!search) return true;
     const q = search.toLowerCase();
     return (
@@ -397,23 +411,18 @@ function SectionPanel({
   // const publishedCount = data.items.filter((i) => i.published !== false).length;
 
   return (
-    <div className="section-panel">
+    <div>
       <style>{`
-        .section-panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; transition: box-shadow 0.15s; }
-        .section-panel:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.15); }
-        .section-header { display: flex; align-items: center; gap: 14px; padding: 16px 20px; cursor: pointer; transition: background 0.12s; user-select: none; }
-        .section-header:hover { background: var(--bg-elevated); }
-        .section-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        .section-info { flex: 1; min-width: 0; }
-        .section-title { font-size: 14px; font-weight: 700; color: var(--text-primary); }
-        .section-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-        .section-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-        .section-body { border-top: 1px solid var(--border); padding: 0 20px 20px; }
-        .section-toolbar { display: flex; align-items: center; gap: 8px; padding: 14px 0 12px; flex-wrap: wrap; }
-        .section-search { display: flex; align-items: center; gap: 7px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px; flex: 1; min-width: 160px; transition: border-color 0.2s; }
-        .section-search:focus-within { border-color: var(--blue); }
-        .section-search input { background: none; border: none; outline: none; color: var(--text-primary); font-size: 12px; width: 100%; font-family: inherit; }
-        .section-search input::placeholder { color: var(--text-muted); }
+        .sp-header { display: flex; align-items: center; gap: 14px; padding-bottom: 18px; }
+        .sp-icon { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .sp-meta { flex: 1; min-width: 0; }
+        .sp-title { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+        .sp-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+        .sp-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+        .sp-search { display: flex; align-items: center; gap: 7px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 10px; flex: 1; min-width: 160px; transition: border-color 0.2s; }
+        .sp-search:focus-within { border-color: var(--blue); }
+        .sp-search input { background: none; border: none; outline: none; color: var(--text-primary); font-size: 12px; width: 100%; font-family: inherit; }
+        .sp-search input::placeholder { color: var(--text-muted); }
         .cm-table { width: 100%; border-collapse: collapse; }
         .cm-table thead tr { background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
         .cm-table th { padding: 9px 12px; text-align: left; font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
@@ -427,49 +436,49 @@ function SectionPanel({
         .cm-icon-btn { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; transition: all 0.15s; }
         .cm-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
         .cm-icon-btn.danger:hover { background: var(--red-dim); color: var(--red); border-color: rgba(239,68,68,0.25); }
-        .cm-empty { padding: 32px; text-align: center; color: var(--text-muted); font-size: 13px; }
-        .last-updated { font-size: 11px; color: var(--text-muted); padding: 8px 0 0; }
+        .cm-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .cm-empty { padding: 36px; text-align: center; color: var(--text-muted); font-size: 13px; }
+        .sp-refreshing { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); }
+        .spin-anim { animation: sp-spin 0.9s linear infinite; }
+        @keyframes sp-spin { to { transform: rotate(360deg); } }
       `}</style>
 
       {/* Header */}
-      <div className="section-header" onClick={() => setExpanded((e) => !e)}>
-        <div className="section-icon" style={{ background: `${meta.color}18` }}>
-          <meta.icon size={17} style={{ color: meta.color }} />
+      <div className="sp-header">
+        <div className="sp-icon" style={{ background: `${meta.color}18` }}>
+          <meta.icon size={18} style={{ color: meta.color }} />
         </div>
-        <div className="section-info">
-          <div className="section-title">{meta.label}</div>
-          <div className="section-desc">{meta.description}</div>
+        <div className="sp-meta">
+          <div className="sp-title">{meta.label}</div>
+          <div className="sp-desc">{meta.description}</div>
         </div>
-        <div className="section-meta">
-          <Badge variant="blue">{data.items.length} items</Badge>
-          {/* {publishedCount < data.items.length && (
-            <Badge variant="amber">{data.items.length - publishedCount} hidden</Badge>
-          )} */}
-          {data.lastUpdated && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {sectionState.loading && (
+            <span className="sp-refreshing">
+              <RefreshCw size={11} className="spin-anim" /> Refreshing…
+            </span>
+          )}
+          <Badge variant="blue">{data?.items.length ?? 0} items</Badge>
+          {data?.lastUpdated && (
             <span style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
               {formatDate(data.lastUpdated)}
             </span>
           )}
-          {expanded
-            ? <ChevronUp size={14} style={{ color: "var(--text-muted)" }} />
-            : <ChevronDown size={14} style={{ color: "var(--text-muted)" }} />
-          }
         </div>
       </div>
 
       {/* Expanded body */}
-      {expanded && (
-        <div className="section-body">
-          <div className="section-toolbar">
-            <div className="section-search">
-              <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ color: "var(--text-muted)", flexShrink: 0 }}>
-                <circle cx="11" cy="11" r="8" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35" />
-              </svg>
-              <input
-                placeholder="Search items…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
+      <div className="section-body">
+        <div className="section-toolbar">
+          <div className="section-search">
+            <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ color: "var(--text-muted)", flexShrink: 0 }}>
+              <circle cx="11" cy="11" r="8" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35" />
+            </svg>
+            <input
+              placeholder="Search items…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
               />
               {search && (
                 <button style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex" }} onClick={() => setSearch("")}>
@@ -541,182 +550,73 @@ function SectionPanel({
                       <td>
                         <div className="cm-actions">
                           {/* <button
-                            className="cm-icon-btn"
-                            title={item.published !== false ? "Unpublish" : "Publish"}
-                            onClick={() => handleTogglePublish(item)}
-                          >
-                            {item.published !== false ? <EyeOff size={12} /> : <Eye size={12} />}
-                          </button> */}
-                          <button className="cm-icon-btn" title="Edit" onClick={() => setEditing(item)}>
-                            <Edit2 size={12} />
-                          </button>
-                          <button className="cm-icon-btn danger" title="Delete" onClick={() => setDeleting(item)}>
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {data.lastUpdated && (
-            <div className="last-updated">
-              Last updated:{" "}
-              {data.lastUpdated.toLocaleString("en-PH", {
-                month: "short", day: "numeric", year: "numeric",
-                hour: "2-digit", minute: "2-digit",
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Modals */}
-      <Modal open={creating} onClose={() => setCreating(false)} title={`Add Item — ${meta.label}`} size="md">
-        <ItemForm sectionKey={sectionKey} initial={emptyItemForSection(sectionKey)} onSubmit={handleCreate} loading={submitting} takenSortNumbers={takenSortNumbers} />
-      </Modal>
-
-      <Modal open={!!editing} onClose={() => setEditing(null)} title={`Edit Item — ${meta.label}`} size="md">
-        {editing && (
-          <ItemForm sectionKey={sectionKey} initial={editing} onSubmit={handleEdit} loading={submitting} isEdit takenSortNumbers={takenSortNumbers} />
-        )}
-      </Modal>
-
-      <ConfirmDialog
-        open={!!deleting}
-        onClose={() => setDeleting(null)}
-        onConfirm={handleDelete}
-        title="Delete Item"
-        message={`Delete "${deleting ? getItemTitle(deleting, sectionKey) : ""}"? This cannot be undone.`}
-        confirmLabel="Delete"
-        danger
-        loading={submitting}
-      />
-
-      {/* Settings modal — writes flat to the section root doc */}
-      <Modal
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        title={`Settings — ${meta.label}`}
-        size="sm"
-        description="Configure display options for this section."
-      >
-        <SectionSettingsForm
-          sectionKey={sectionKey}
-          initial={data.options}
-          onSubmit={handleSaveSettings}
-          loading={submitting}
-        />
-      </Modal>
-    </div>
-  );
-}
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
-
-export default function ContentManagementPage() {
-  useAuthGuard({ module: "content-management" });
-  const { user } = useAuth();
 
   const actor = {
-    actorId:    user?.uid          ?? "",
-    actorName:  user?.displayName  ?? "Unknown",
-    actorEmail: user?.email        ?? "",
+    actorId: user?.uid ?? "",
+    actorName: user?.displayName ?? "Unknown",
+    actorEmail: user?.email ?? "",
   };
 
   const content = useContent(actor);
-  const { sectionData, loading } = content;
-  const [refreshing, setRefreshing] = useState(false);
+  const { activeTab, setActiveTab } = useTabs(SECTION_KEYS);
 
-  const loadAll = useCallback(async () => {
-    try {
-      await content.fetchAll(SECTION_KEYS);
-    } catch {
-      toast.error("Failed to load content", "Check console for details");
-    }
-  }, [content]);
-
-  useEffect(() => { loadAll(); }, []);
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await loadAll();
-    setRefreshing(false);
-  };
-
-  const totalItems = Object.values(sectionData).reduce(
-    (acc, d) => acc + (d?.items.length ?? 0), 0,
+  const { getSection, fetchSection, refreshSection } = usePerSectionData(
+    content.fetchSection,
   );
-  // const totalPublished = Object.values(sectionData).reduce(
-  //   (acc, d) => acc + (d?.items.filter((i) => i.published !== false).length ?? 0), 0,
-  // );
+
+  const handleTabChange = useCallback(
+    (key: ContentSectionKey) => {
+      setActiveTab(key);
+      if (key !== "about_giggre") fetchSection(key);
+    },
+    [setActiveTab, fetchSection],
+  );
+
+  const hasMounted = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (node && activeTab !== "about_giggre") fetchSection(activeTab);
+    },
+    [],
+  );
+
+  const tabConfigs = SECTIONS.map((s) => {
+    if (s.key === "about_giggre") {
+      return { ...s, count: undefined, loading: false };
+    }
+    const state = getSection(s.key);
+    return { ...s, count: state.data?.items.length, loading: state.loading };
+  });
 
   return (
-    <AdminLayout title="Content Management" subtitle="Manage app content sections and display settings">
+    <AdminLayout
+      title="Content Management"
+      subtitle="Manage app content sections and display settings"
+    >
       <style>{`
-        .cm-page { display: flex; flex-direction: column; gap: 12px; }
-        .cm-stats { display: flex; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
-        .cm-stat { display: flex; align-items: center; gap: 8px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 14px; font-size: 12px; color: var(--text-secondary); }
-        .cm-stat strong { color: var(--text-primary); font-size: 14px; font-weight: 700; }
-        .cm-toolbar { display: flex; align-items: center; justify-content: flex-end; margin-bottom: 4px; }
-        .cm-refresh-btn { display: flex; align-items: center; gap: 6px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 12px; font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: all 0.15s; }
-        .cm-refresh-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
-        .cm-refresh-btn svg { transition: transform 0.3s; }
-        .cm-refresh-btn:hover svg { transform: rotate(180deg); }
-        .cm-loading { display: flex; align-items: center; justify-content: center; padding: 80px; flex-direction: column; gap: 12px; }
-        .spin-anim { animation: cm-spin 1s linear infinite; }
-        @keyframes cm-spin { to { transform: rotate(360deg); } }
-        .cm-section-grid { display: flex; flex-direction: column; gap: 10px; }
+        .cm-page { display: flex; flex-direction: column; gap: 14px; }
+        .cm-tab-content { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; min-height: 320px; }
       `}</style>
 
-      <div className="cm-page">
-        {!loading && (
-          <div className="cm-stats">
-            <div className="cm-stat"><strong>{SECTIONS.length}</strong> sections</div>
-            <div className="cm-stat"><strong>{totalItems}</strong> total items</div>
-            {/* <div className="cm-stat">
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", display: "inline-block" }} />
-              <strong>{totalPublished}</strong> published
-            </div>
-            {totalItems - totalPublished > 0 && (
-              <div className="cm-stat">
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--amber)", display: "inline-block" }} />
-                <strong>{totalItems - totalPublished}</strong> hidden
-              </div>
-            )} */}
-          </div>
-        )}
+      <div className="cm-page" ref={hasMounted}>
+        <TabBar tabs={tabConfigs} activeTab={activeTab} onChange={handleTabChange} />
 
-        <div className="cm-toolbar">
-          <button className="cm-refresh-btn" onClick={handleRefresh} disabled={refreshing || loading}>
-            <RefreshCw size={13} className={refreshing ? "spin-anim" : ""} />
-            Refresh
-          </button>
+        <div className="cm-tab-content">
+          {activeTab === "about_giggre" && (
+            <AboutGiggrePanel actor={actor} />
+          )}
+
+          {ITEM_BASED_SECTIONS.map((key) =>
+            activeTab === key ? (
+              <SectionPanel
+                key={key}
+                sectionKey={key}
+                sectionState={getSection(key)}
+                onRefresh={() => refreshSection(key)}
+                content={content}
+              />
+            ) : null
+          )}
         </div>
-
-        {loading ? (
-          <div className="cm-loading">
-            <RefreshCw size={22} className="spin-anim" style={{ color: "var(--text-muted)" }} />
-            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Loading content sections…</span>
-          </div>
-        ) : (
-          <div className="cm-section-grid">
-            {SECTION_KEYS.map((key) =>
-              sectionData[key] ? (
-                <SectionPanel
-                  key={key}
-                  sectionKey={key}
-                  data={sectionData[key]!}
-                  onRefresh={loadAll}
-                  content={content}
-                />
-              ) : null,
-            )}
-          </div>
-        )}
       </div>
     </AdminLayout>
   );
