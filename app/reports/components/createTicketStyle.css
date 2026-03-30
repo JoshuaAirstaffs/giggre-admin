@@ -1,0 +1,412 @@
+.create-ticket {
+    padding: 20px;
+    width: 100%;
+}
+
+.ct-section {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  width: 50%;
+  margin: 0 auto;
+}
+
+/* Switcher row */
+.ct-switcher-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.ct-switcher-label {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.ct-switcher-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Toggle */
+.ct-toggle {
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s, border-color 0.2s;
+  padding: 0;
+}
+.ct-toggle--on {
+  background: var(--blue);
+  border-color: var(--blue);
+}
+.ct-toggle-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  transition: left 0.2s;
+  pointer-events: none;
+}
+.ct-toggle--on .ct-toggle-thumb {
+  left: 21px;
+  background: #fff;
+}
+
+/* Field label */
+.ct-field-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 6px;
+}
+.ct-required {
+  color: var(--red);
+  margin-left: 2px;
+}
+
+/* Chip input wrapper */
+.ct-chip-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  min-height: 42px;
+  cursor: text;
+  position: relative;
+  background: var(--bg-elevated);
+  transition: border-color 0.15s;
+}
+.ct-chip-wrap:focus-within {
+  border-color: var(--blue);
+}
+.ct-chip-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 14px;
+  color: var(--text-primary);
+  min-width: 160px;
+  flex: 1;
+  padding: 2px 0;
+}
+.ct-chip-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Chips */
+.ct-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-radius: 999px;
+  padding: 3px 10px 3px 4px;
+  font-size: 13px;
+}
+.ct-chip-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--blue);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ct-chip-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--blue);
+  font-size: 13px;
+  padding: 0;
+  line-height: 1;
+  opacity: 0.6;
+}
+.ct-chip-remove:hover {
+  opacity: 1;
+}
+
+/* Dropdown */
+.ct-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  z-index: 50;
+  overflow: hidden;
+}
+.ct-dd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ct-dd-item:hover {
+  background: var(--bg-hover);
+}
+.ct-dd-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--blue-dim);
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ct-dd-name {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.ct-dd-email {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Switcher left group */
+.ct-switcher-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ct-switcher-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--blue-dim);
+  color: var(--blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Dropdown empty/loading state */
+.ct-dd-empty {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Count label */
+.ct-count {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Form container */
+.create-ticket-form-container {
+  width: 50%;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+/* Subject input */
+.ct-subject-input {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+/* Templates container */
+.ct-templates-container {
+  margin-top: 10px;
+}
+
+.ct-template-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ct-template-items-container {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.ct-template-item {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ct-template-item:hover {
+  background: var(--bg-hover);
+}
+
+.ct-template-item--active {
+  border-color: var(--blue);
+  background: var(--blue-dim);
+  color: var(--blue);
+}
+
+/* Template action buttons (edit + delete) */
+.ct-template-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ct-template-edit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  color: var(--blue);
+  background: var(--blue-dim);
+  transition: background 0.15s, color 0.15s;
+}
+
+.ct-template-edit-btn:hover {
+  background: var(--blue);
+  color: #fff;
+}
+
+.ct-template-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  color: var(--red);
+  background: var(--red-dim);
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ct-template-delete-btn:hover {
+  background: var(--red);
+  color: #fff;
+}
+
+/* Add template button */
+.ct-add-template-btn {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.ct-add-template-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* Template name input (used in both add + edit modals) */
+.ct-template-name-input {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 14px;
+  margin-bottom: 40px;
+}
+
+/* Save / send buttons */
+.ct-save-template-btn {
+  margin-top: 10px;
+  background: var(--blue);
+  color: white;
+  width: 100%;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.ct-save-template-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ct-save-template-btn:not(:disabled):hover {
+  scale: 1.02;
+}
+
+.ct-message-container {
+  margin-top: 20px;
+}
+
+.ct-actions-container {
+  margin-top: 10px;
+}
+
+.ct-send-btn {
+  background: var(--blue);
+  color: white;
+  width: 100%;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.ct-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ct-send-btn:not(:disabled):hover {
+  scale: 1.02;
+}

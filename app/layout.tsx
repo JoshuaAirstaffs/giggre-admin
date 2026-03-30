@@ -23,7 +23,7 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body>
+      <body suppressHydrationWarning>
         {/* ThemeProvider must wrap AuthProvider so theme is available everywhere */}
         <ThemeProvider>
           <AuthProvider>{children}</AuthProvider>
