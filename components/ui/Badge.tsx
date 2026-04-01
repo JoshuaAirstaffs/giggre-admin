@@ -5,7 +5,10 @@ type BadgeVariant =
   | "red"
   | "purple"
   | "gray"
-  | "orange";
+  | "orange"
+  | "teal"
+  | "pink"
+  | "indigo";
 
 interface BadgeProps {
   children: React.ReactNode;
@@ -21,6 +24,9 @@ const VARIANT_STYLES: Record<BadgeVariant, { bg: string; text: string }> = {
   purple: { bg: "var(--purple-dim)", text: "var(--purple)" },
   orange: { bg: "var(--orange-dim)", text: "var(--orange)" },
   gray:   { bg: "var(--bg-elevated)", text: "var(--text-secondary)" },
+  teal:   { bg: "rgba(13,148,136,0.12)",  text: "var(--teal, #0d9488)"  },
+  pink:   { bg: "rgba(236,72,153,0.12)",  text: "var(--pink, #ec4899)"  },
+  indigo: { bg: "rgba(99,102,241,0.12)",  text: "var(--indigo, #6366f1)" },
 };
 
 export default function Badge({

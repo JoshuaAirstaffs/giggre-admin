@@ -53,7 +53,7 @@ interface LogEntry {
 
 const ALL_MODULE_KEYS = Object.keys(MODULE_CONFIG);
 const ALL_ACTION_KEYS = Object.keys(ACTION_CONFIG);
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 10;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -65,10 +65,6 @@ function formatDate(d: Date | null): string {
   });
 }
 
-/**
- * Renders a compact preview of the meta diff shown below the description.
- * Only shown for specific actions where the diff is meaningful and brief.
- */
 function buildMetaPreview(log: LogEntry): string | null {
   const { action, meta } = log;
   if (!meta) return null;
@@ -81,7 +77,7 @@ function buildMetaPreview(log: LogEntry): string | null {
         : "All permissions removed";
     }
     case "toggled_admin_status":
-      return null; // already captured in description
+      return null;
     case "changed_role": {
       const from = meta.from as string | null;
       const to   = meta.to   as string | null;
@@ -120,17 +116,18 @@ export default function ActivityLogsPage() {
 
   // Pagination
   const [page, setPage] = useState(1);
-  const [cursors, setCursors] = useState<QueryDocumentSnapshot<DocumentData>[]>([]);
+  const [pageStartCursors, setPageStartCursors] = useState<
+    QueryDocumentSnapshot<DocumentData>[]
+  >([]);
   const [hasMore, setHasMore] = useState(false);
 
   const activeFilterCount = [actionFilter, moduleFilter, dateFrom, dateTo].filter(Boolean).length;
 
-  // ── Fetch ─────────────────────────────────────────────────────────────────
-  const fetchLogs = useCallback(
+  // ── Core fetch ────────────────────────────────────────────────────────────
+  const fetchPage = useCallback(
     async (
       cursor?: QueryDocumentSnapshot<DocumentData>,
-      direction: "next" | "prev" | "reset" = "reset",
-    ) => {
+    ): Promise<QueryDocumentSnapshot<DocumentData> | null> => {
       setLoading(true);
       try {
         const constraints: any[] = [orderBy("createdAt", "desc"), limit(PAGE_SIZE + 1)];
@@ -138,12 +135,16 @@ export default function ActivityLogsPage() {
         if (actionFilter) constraints.unshift(where("action", "==", actionFilter));
         if (moduleFilter) constraints.unshift(where("module", "==", moduleFilter));
         if (dateFrom) {
-          constraints.push(where("createdAt", ">=", Timestamp.fromDate(new Date(dateFrom))));
+          constraints.push(
+            where("createdAt", ">=", Timestamp.fromDate(new Date(dateFrom))),
+          );
         }
         if (dateTo) {
           const end = new Date(dateTo);
           end.setDate(end.getDate() + 1);
-          constraints.push(where("createdAt", "<", Timestamp.fromDate(end)));
+          constraints.push(
+            where("createdAt", "<", Timestamp.fromDate(end)),
+          );
         }
         if (cursor) constraints.push(startAfter(cursor));
 
@@ -176,11 +177,10 @@ export default function ActivityLogsPage() {
         setLogs(list);
         setHasMore(hasNextPage);
 
-        if (direction === "next" && pageDocs.length > 0) {
-          setCursors((prev) => [...prev, pageDocs[pageDocs.length - 1]]);
-        }
+        return pageDocs.length > 0 ? pageDocs[pageDocs.length - 1] : null;
       } catch (err) {
         console.error("Failed to fetch activity logs:", err);
+        return null;
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -191,30 +191,50 @@ export default function ActivityLogsPage() {
 
   useEffect(() => {
     setPage(1);
-    setCursors([]);
-    fetchLogs(undefined, "reset");
-  }, [fetchLogs]);
+    setPageStartCursors([]);
+    fetchPage(undefined).then((lastDoc) => {
+      if (lastDoc) setPageStartCursors([lastDoc]);
+    });
+  }, [fetchPage]);
 
-  // ── Pagination handlers ───────────────────────────────────────────────────
+  // ── Next page ─────────────────────────────────────────────────────────────
   const handleNextPage = () => {
-    if (!hasMore || logs.length === 0) return;
-    setPage((p) => p + 1);
-    fetchLogs(cursors[cursors.length - 1], "next");
+    if (!hasMore || loading) return;
+
+    const cursor = pageStartCursors[page - 1];
+    fetchPage(cursor).then((lastDoc) => {
+      const nextPage = page + 1;
+      setPage(nextPage);
+
+      if (lastDoc) {
+        setPageStartCursors((prev) => {
+          const updated = [...prev];
+          updated[nextPage - 1] = lastDoc; // index = nextPage - 1
+          return updated;
+        });
+      }
+    });
   };
 
+  // ── Previous page ─────────────────────────────────────────────────────────
   const handlePrevPage = () => {
-    if (page <= 1) return;
-    const prevCursor = cursors[cursors.length - 3];
-    setCursors((prev) => prev.slice(0, -1));
-    setPage((p) => p - 1);
-    fetchLogs(prevCursor, "prev");
+    if (page <= 1 || loading) return;
+    const targetPage = page - 1;
+
+    const cursor = targetPage === 1 ? undefined : pageStartCursors[targetPage - 2];
+    fetchPage(cursor).then(() => {
+      setPage(targetPage);
+    });
   };
 
+  // ── Refresh ───────────────────────────────────────────────────────────────
   const handleRefresh = () => {
     setRefreshing(true);
     setPage(1);
-    setCursors([]);
-    fetchLogs(undefined, "reset");
+    setPageStartCursors([]);
+    fetchPage(undefined).then((lastDoc) => {
+      if (lastDoc) setPageStartCursors([lastDoc]);
+    });
   };
 
   const handleClearFilters = () => {
@@ -225,7 +245,7 @@ export default function ActivityLogsPage() {
     setSearch("");
   };
 
-  // ── Client-side search (across already-fetched page) ──────────────────────
+  // ── Client-side search across the fetched page ────────────────────────────
   const filtered = logs.filter((log) => {
     if (!search) return true;
     const q = search.toLowerCase();
@@ -279,7 +299,7 @@ export default function ActivityLogsPage() {
         .logs-table tbody tr:hover { background: var(--bg-elevated); }
         .logs-table td { padding: 12px 16px; font-size: 13px; color: var(--text-secondary); vertical-align: top; }
 
-        /* ── Row accent stripe (left border keyed to module color) ── */
+        /* ── Row accent stripe ── */
         .log-row-accent { border-left: 3px solid transparent; }
 
         /* ── Cell contents ── */
@@ -299,13 +319,13 @@ export default function ActivityLogsPage() {
         .logs-empty-icon { width: 40px; height: 40px; margin: 0 auto 12px; background: var(--bg-elevated); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--text-muted); }
 
         /* ── Footer / pagination ── */
-        .logs-footer { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--bg-elevated); }
+        .logs-footer { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--bg-elevated); gap: 12px; flex-wrap: wrap; }
         .logs-count { font-size: 12px; color: var(--text-muted); }
         .pagination { display: flex; align-items: center; gap: 6px; }
-        .page-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; transition: all 0.15s; }
-        .page-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
-        .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .page-info { font-size: 12px; color: var(--text-secondary); padding: 0 4px; }
+        .page-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; transition: all 0.15s; font-family: inherit; }
+        .page-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-muted); }
+        .page-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+        .page-info { font-size: 12px; color: var(--text-secondary); padding: 0 6px; font-weight: 600; white-space: nowrap; }
 
         /* ── Spinner ── */
         .spin-slow { animation: al-spin 1s linear infinite; }
@@ -341,9 +361,9 @@ export default function ActivityLogsPage() {
           )}
         </div>
 
-        {/* <div className="logs-toolbar-right">
+        <div className="logs-toolbar-right">
           <button
-            className={`filter-btn ${showFilters ? "active" : ""}`}
+            className={`filter-btn${showFilters ? " active" : ""}`}
             onClick={() => setShowFilters((s) => !s)}
           >
             <Filter size={13} />
@@ -355,10 +375,10 @@ export default function ActivityLogsPage() {
           <button className="refresh-btn" onClick={handleRefresh} disabled={refreshing}>
             <RefreshCw size={13} className={refreshing ? "spin-slow" : ""} />
           </button>
-        </div> */}
+        </div>
       </div>
 
-      {/* ── Filter Panel — data-driven from config, zero hardcoding ── */}
+      {/* ── Filter Panel ── */}
       {showFilters && (
         <div className="filters-panel">
           <div className="filter-group">
@@ -473,12 +493,10 @@ export default function ActivityLogsPage() {
                     className="log-row-accent"
                     style={{ borderLeftColor: moduleCfg.accentColor }}
                   >
-                    {/* Date / Time */}
                     <td>
                       <div className="log-time">{formatDate(log.createdAt)}</div>
                     </td>
 
-                    {/* Actor */}
                     <td>
                       <div className="log-actor-name">{log.actorName}</div>
                       {log.actorEmail
@@ -489,7 +507,6 @@ export default function ActivityLogsPage() {
                       }
                     </td>
 
-                    {/* Module / Action — both badges share the module color family */}
                     <td>
                       <div className="log-badges">
                         {log.module && (
@@ -503,7 +520,6 @@ export default function ActivityLogsPage() {
                       </div>
                     </td>
 
-                    {/* Description — stored verbatim from buildDescription, displayed as-is */}
                     <td>
                       <div className="log-description">
                         {log.description || "—"}
@@ -513,7 +529,6 @@ export default function ActivityLogsPage() {
                       )}
                     </td>
 
-                    {/* Target */}
                     <td>
                       {log.targetName && (
                         <div className="log-target-name">{log.targetName}</div>
@@ -532,22 +547,33 @@ export default function ActivityLogsPage() {
           </tbody>
         </table>
 
-        {/* {!loading && filtered.length > 0 && (
+        {/* ── Pagination footer ── */}
+        {!loading && filtered.length > 0 && (
           <div className="logs-footer">
             <span className="logs-count">
-              Page {page} · {filtered.length} entr{filtered.length !== 1 ? "ies" : "y"}
+              Page {page} · {filtered.length} entr{filtered.length !== 1 ? "ies" : "y"} shown
             </span>
             <div className="pagination">
-              <button className="page-btn" onClick={handlePrevPage} disabled={page <= 1}>
+              <button
+                className="page-btn"
+                onClick={handlePrevPage}
+                disabled={page <= 1 || loading}
+                title="Previous page"
+              >
                 <ChevronLeft size={14} />
               </button>
-              <span className="page-info">{page}</span>
-              <button className="page-btn" onClick={handleNextPage} disabled={!hasMore}>
+              <span className="page-info">Page {page}</span>
+              <button
+                className="page-btn"
+                onClick={handleNextPage}
+                disabled={!hasMore || loading}
+                title="Next page"
+              >
                 <ChevronRight size={14} />
               </button>
             </div>
           </div>
-        )} */}
+        )}
       </div>
     </AdminLayout>
   );
