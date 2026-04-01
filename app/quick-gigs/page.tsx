@@ -26,7 +26,7 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TabKey = "decline_suspension" | "time_limits" | "matching_engine" | "notifications";
+type TabKey = "decline_suspension" | "matching_engine";
 
 interface SuspensionTier {
   decline_count_trigger: number;
@@ -53,13 +53,6 @@ interface MatchingEngineConfig {
   allow_reassignment_after_exhaustion: boolean;
   search_timeout_minutes: number;
   max_dispatch_attempts: number;
-}
-
-interface NotificationsConfig {
-  notification_template_suspension: string;
-  notification_template_no_worker_found: string;
-  notification_template_dispatch: string;
-  notification_template_timeout: string;
 }
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
@@ -89,17 +82,6 @@ const MATCHING_DEFAULTS: MatchingEngineConfig = {
   max_dispatch_attempts: 5,
 };
 
-const NOTIF_DEFAULTS: NotificationsConfig = {
-  notification_template_suspension:
-    "Your account has been temporarily suspended due to excessive gig declines. Please wait before accepting more gigs.",
-  notification_template_no_worker_found:
-    "We're sorry, no available workers were found for your gig at this time. Please try again later.",
-  notification_template_dispatch:
-    "You have a new gig assigned! Please check the details and confirm your availability.",
-  notification_template_timeout:
-    "Your response time has expired. The gig has been assigned to another worker.",
-};
-
 // ─── Tab config ───────────────────────────────────────────────────────────────
 
 const TABS: {
@@ -117,14 +99,6 @@ const TABS: {
       description:
         "Configure how the system handles excessive gig declines and automatic worker suspensions.",
     },
-    // {
-    //   key: "time_limits",
-    //   label: "Time & Limits",
-    //   icon: Clock,
-    //   color: "var(--blue)",
-    //   description:
-    //     "Set time windows for gig acceptance and default worker availability settings.",
-    // },
     {
       key: "matching_engine",
       label: "Matching Engine",
@@ -133,14 +107,14 @@ const TABS: {
       description:
         "Define how the platform searches for and dispatches workers to gigs.",
     },
-    {
-      key: "notifications",
-      label: "Notifications",
-      icon: Bell,
-      color: "var(--green)",
-      description:
-        "Manage message templates sent to workers and hosts for key events.",
-    },
+    // {
+    //   key: "notifications",
+    //   label: "Notifications",
+    //   icon: Bell,
+    //   color: "var(--green)",
+    //   description:
+    //     "Manage message templates sent to workers and hosts for key events.",
+    // },
   ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -170,14 +144,14 @@ export default function QuickGigsPage() {
   const [decline, setDecline] = useState<DeclineSuspensionConfig>(DECLINE_DEFAULTS);
   const [savedDecline, setSavedDecline] = useState<DeclineSuspensionConfig>(DECLINE_DEFAULTS);
 
-  const [timeLimits, setTimeLimits] = useState<TimeLimitsConfig>(TIME_DEFAULTS);
-  const [savedTimeLimits, setSavedTimeLimits] = useState<TimeLimitsConfig>(TIME_DEFAULTS);
+  // const [timeLimits, setTimeLimits] = useState<TimeLimitsConfig>(TIME_DEFAULTS);
+  // const [savedTimeLimits, setSavedTimeLimits] = useState<TimeLimitsConfig>(TIME_DEFAULTS);
 
   const [matching, setMatching] = useState<MatchingEngineConfig>(MATCHING_DEFAULTS);
   const [savedMatching, setSavedMatching] = useState<MatchingEngineConfig>(MATCHING_DEFAULTS);
 
-  const [notifs, setNotifs] = useState<NotificationsConfig>(NOTIF_DEFAULTS);
-  const [savedNotifs, setSavedNotifs] = useState<NotificationsConfig>(NOTIF_DEFAULTS);
+  // const [notifs, setNotifs] = useState<NotificationsConfig>(NOTIF_DEFAULTS);
+  // const [savedNotifs, setSavedNotifs] = useState<NotificationsConfig>(NOTIF_DEFAULTS);
 
   // Tier modal
   const [tierModalOpen, setTierModalOpen] = useState(false);
@@ -195,30 +169,28 @@ export default function QuickGigsPage() {
   const loadConfig = useCallback(async () => {
     setLoading(true);
     try {
-      const [dSnap, tSnap, mSnap, nSnap] = await Promise.all([
+      const [dSnap, mSnap] = await Promise.all([
         getDoc(docRef("decline_suspension")),
-        getDoc(docRef("time_limits")),
         getDoc(docRef("matching_engine")),
-        getDoc(docRef("notifications")),
       ]);
 
       const d = dSnap.exists()
         ? { ...DECLINE_DEFAULTS, ...(dSnap.data() as Partial<DeclineSuspensionConfig>) }
         : DECLINE_DEFAULTS;
-      const t = tSnap.exists()
-        ? { ...TIME_DEFAULTS, ...(tSnap.data() as Partial<TimeLimitsConfig>) }
-        : TIME_DEFAULTS;
+      // const t = tSnap.exists()
+      //   ? { ...TIME_DEFAULTS, ...(tSnap.data() as Partial<TimeLimitsConfig>) }
+      //   : TIME_DEFAULTS;
       const m = mSnap.exists()
         ? { ...MATCHING_DEFAULTS, ...(mSnap.data() as Partial<MatchingEngineConfig>) }
         : MATCHING_DEFAULTS;
-      const n = nSnap.exists()
-        ? { ...NOTIF_DEFAULTS, ...(nSnap.data() as Partial<NotificationsConfig>) }
-        : NOTIF_DEFAULTS;
+      // const n = nSnap.exists()
+      //   ? { ...NOTIF_DEFAULTS, ...(nSnap.data() as Partial<NotificationsConfig>) }
+      //   : NOTIF_DEFAULTS;
 
       setDecline(d); setSavedDecline(d);
-      setTimeLimits(t); setSavedTimeLimits(t);
+      // setTimeLimits(t); setSavedTimeLimits(t);
       setMatching(m); setSavedMatching(m);
-      setNotifs(n); setSavedNotifs(n);
+      // setNotifs(n); setSavedNotifs(n);
     } catch {
       toast.error("Load failed", "Could not load Quick Gig configuration.");
     } finally {
@@ -233,9 +205,9 @@ export default function QuickGigsPage() {
   const hasChanges = (() => {
     switch (activeTab) {
       case "decline_suspension": return JSON.stringify(decline) !== JSON.stringify(savedDecline);
-      case "time_limits": return JSON.stringify(timeLimits) !== JSON.stringify(savedTimeLimits);
+      // case "time_limits": return JSON.stringify(timeLimits) !== JSON.stringify(savedTimeLimits);
       case "matching_engine": return JSON.stringify(matching) !== JSON.stringify(savedMatching);
-      case "notifications": return JSON.stringify(notifs) !== JSON.stringify(savedNotifs);
+      // case "notifications": return JSON.stringify(notifs) !== JSON.stringify(savedNotifs);
     }
   })();
 
@@ -252,18 +224,18 @@ export default function QuickGigsPage() {
           await setDoc(docRef("decline_suspension"), decline);
           setSavedDecline({ ...decline });
           break;
-        case "time_limits":
-          await setDoc(docRef("time_limits"), timeLimits);
-          setSavedTimeLimits({ ...timeLimits });
-          break;
+        // case "time_limits":
+        //   await setDoc(docRef("time_limits"), timeLimits);
+        //   setSavedTimeLimits({ ...timeLimits });
+        //   break;
         case "matching_engine":
           await setDoc(docRef("matching_engine"), matching);
           setSavedMatching({ ...matching });
           break;
-        case "notifications":
-          await setDoc(docRef("notifications"), notifs);
-          setSavedNotifs({ ...notifs });
-          break;
+        // case "notifications":
+        //   await setDoc(docRef("notifications"), notifs);
+        //   setSavedNotifs({ ...notifs });
+        //   break;
       }
 
       await writeLog({
@@ -289,9 +261,9 @@ export default function QuickGigsPage() {
   const handleDiscard = () => {
     switch (activeTab) {
       case "decline_suspension": setDecline({ ...savedDecline }); break;
-      case "time_limits": setTimeLimits({ ...savedTimeLimits }); break;
+      // case "time_limits": setTimeLimits({ ...savedTimeLimits }); break;
       case "matching_engine": setMatching({ ...savedMatching }); break;
-      case "notifications": setNotifs({ ...savedNotifs }); break;
+      // case "notifications": setNotifs({ ...savedNotifs }); break;
     }
     toast.info("Discarded", "Changes reverted to last saved state.");
   };
@@ -309,7 +281,6 @@ export default function QuickGigsPage() {
     const tier = decline.suspension_tier_table[idx];
     setTierForm({
       tier_label: "",
-      is_active: true,
       ...tier,
     });
     setTierModalOpen(true);
@@ -335,6 +306,13 @@ export default function QuickGigsPage() {
     const tiers = decline.suspension_tier_table.filter((_, i) => i !== idx);
     setDecline((prev) => ({ ...prev, suspension_tier_table: tiers }));
     setDeleteConfirmIdx(null);
+  };
+
+  const toggleTierActive = (idx: number) => {
+    const tiers = decline.suspension_tier_table.map((t, i) =>
+      i === idx ? { ...t, is_active: !t.is_active } : t
+    );
+    setDecline((prev) => ({ ...prev, suspension_tier_table: tiers }));
   };
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -403,7 +381,6 @@ export default function QuickGigsPage() {
         .qgc-field--col { display: flex; flex-direction: column; gap: 8px; }
         .qgc-field-meta { flex: 1; min-width: 0; }
         .qgc-field-label { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-        // .qgc-field-code { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
         .qgc-field-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.5; }
 
         /* ── Number input ── */
@@ -530,9 +507,9 @@ export default function QuickGigsPage() {
               const isDirty = (() => {
                 switch (key) {
                   case "decline_suspension": return JSON.stringify(decline) !== JSON.stringify(savedDecline);
-                  case "time_limits": return JSON.stringify(timeLimits) !== JSON.stringify(savedTimeLimits);
+                  // case "time_limits": return JSON.stringify(timeLimits) !== JSON.stringify(savedTimeLimits);
                   case "matching_engine": return JSON.stringify(matching) !== JSON.stringify(savedMatching);
-                  case "notifications": return JSON.stringify(notifs) !== JSON.stringify(savedNotifs);
+                  // case "notifications": return JSON.stringify(notifs) !== JSON.stringify(savedNotifs);
                 }
               })();
               return (
@@ -578,26 +555,21 @@ export default function QuickGigsPage() {
                   openAddTier={openAddTier}
                   openEditTier={openEditTier}
                   setDeleteConfirmIdx={setDeleteConfirmIdx}
+                  toggleTierActive={toggleTierActive}
                 />
               )}
-              {/* {activeTab === "time_limits" && (
-                <TimeLimitsTab
-                  config={timeLimits}
-                  set={(key, value) => setTimeLimits((prev) => ({ ...prev, [key]: value }))}
-                />
-              )} */}
               {activeTab === "matching_engine" && (
                 <MatchingEngineTab
                   config={matching}
                   set={(key, value) => setMatching((prev) => ({ ...prev, [key]: value }))}
                 />
               )}
-              {activeTab === "notifications" && (
+              {/* {activeTab === "notifications" && (
                 <NotificationsTab
                   config={notifs}
                   set={(key, value) => setNotifs((prev) => ({ ...prev, [key]: value }))}
                 />
-              )}
+              )} */}
             </>
           )}
 
@@ -736,13 +708,14 @@ export default function QuickGigsPage() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function DeclineSuspensionTab({
-  config, set, openAddTier, openEditTier, setDeleteConfirmIdx,
+  config, set, openAddTier, openEditTier, setDeleteConfirmIdx, toggleTierActive,
 }: {
   config: DeclineSuspensionConfig;
   set: <K extends keyof DeclineSuspensionConfig>(key: K, value: DeclineSuspensionConfig[K]) => void;
   openAddTier: () => void;
   openEditTier: (idx: number) => void;
   setDeleteConfirmIdx: (idx: number) => void;
+  toggleTierActive: (idx: number) => void;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -755,7 +728,6 @@ function DeclineSuspensionTab({
         <div className="qgc-field qgc-field--row">
           <div className="qgc-field-meta">
             <div className="qgc-field-label">Free Decline Limit</div>
-            {/* <div className="qgc-field-code">free_decline_limit · Integer · default: 5</div> */}
             <div className="qgc-field-desc">
               Number of gig declines a worker can make per day without any penalty. Once exceeded,
               the suspension system takes over (if enabled).
@@ -776,7 +748,6 @@ function DeclineSuspensionTab({
         <div className="qgc-field qgc-field--row">
           <div className="qgc-field-meta">
             <div className="qgc-field-label">Automatic Suspension</div>
-            {/* <div className="qgc-field-code">suspension_enabled · Boolean · default: true</div> */}
             <div className="qgc-field-desc">
               Enable or disable the automatic suspension system. When disabled, workers can exceed
               the free decline limit without penalty.
@@ -855,15 +826,21 @@ function DeclineSuspensionTab({
                       </span>
                     </td>
                     <td>
-                      <span style={{
-                        display: "inline-flex", alignItems: "center", gap: 4,
-                        padding: "2px 8px", borderRadius: 20, fontSize: 11, fontWeight: 600,
-                        background: active ? "rgba(16,185,129,0.12)" : "rgba(71,85,105,0.15)",
-                        color: active ? "var(--green)" : "var(--text-muted)",
-                      }}>
+                      <button
+                        onClick={() => toggleTierActive(idx)}
+                        title={active ? "Click to disable" : "Click to activate"}
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          padding: "2px 8px", borderRadius: 20, fontSize: 11, fontWeight: 600,
+                          background: active ? "rgba(16,185,129,0.12)" : "rgba(71,85,105,0.15)",
+                          color: active ? "var(--green)" : "var(--text-muted)",
+                          border: "none", cursor: "pointer", fontFamily: "inherit",
+                          transition: "background 0.15s, color 0.15s",
+                        }}
+                      >
                         <span style={{ width: 5, height: 5, borderRadius: "50%", background: "currentColor", flexShrink: 0 }} />
                         {active ? "Active" : "Disabled"}
-                      </span>
+                      </button>
                     </td>
                     <td>
                       <div className="qgc-tier-actions">
@@ -887,57 +864,6 @@ function DeclineSuspensionTab({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tab: Time & Limits
-// ─────────────────────────────────────────────────────────────────────────────
-
-// function TimeLimitsTab({
-//   config, set,
-// }: {
-//   config: TimeLimitsConfig;
-//   set: <K extends keyof TimeLimitsConfig>(key: K, value: TimeLimitsConfig[K]) => void;
-// }) {
-//   return (
-//     <div className="qgc-card">
-//       <div className="qgc-card-header">
-//         <span className="qgc-card-title">Time & Limit Settings</span>
-//       </div>
-
-
-
-//       <div className="qgc-field qgc-field--row">
-//         <div className="qgc-field-meta">
-//           <div className="qgc-field-label">Auto-Accept Default</div>
-//           {/* <div className="qgc-field-code">auto_accept_enabled_default · Boolean · default: false</div> */}
-//           <div className="qgc-field-desc">
-//             The default auto-accept setting applied when a new worker joins the platform. When
-//             enabled, gigs are accepted automatically on behalf of the worker.
-//           </div>
-//         </div>
-//         <Toggle
-//           value={config.auto_accept_enabled_default}
-//           onChange={(v) => set("auto_accept_enabled_default", v)}
-//         />
-//       </div>
-
-//       <div className="qgc-field qgc-field--row">
-//         <div className="qgc-field-meta">
-//           <div className="qgc-field-label">Worker Availability Default</div>
-//           {/* <div className="qgc-field-code">worker_toggle_default · Boolean · default: false</div> */}
-//           <div className="qgc-field-desc">
-//             Default availability state (ON / OFF) when a worker opens the app. When enabled,
-//             workers start as available immediately upon opening.
-//           </div>
-//         </div>
-//         <Toggle
-//           value={config.worker_toggle_default}
-//           onChange={(v) => set("worker_toggle_default", v)}
-//         />
-//       </div>
-//     </div>
-//   );
-// }
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Tab: Matching Engine
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -955,7 +881,6 @@ function MatchingEngineTab({
       <div className="qgc-field qgc-field--row">
         <div className="qgc-field-meta">
           <div className="qgc-field-label">Review Window</div>
-          {/* <div className="qgc-field-code">review_window_seconds · Integer · default: 20</div> */}
           <div className="qgc-field-desc">
             Time given to a worker to accept or decline a gig before the system automatically
             counts it as a decline and moves to the next candidate.
@@ -1012,7 +937,6 @@ function MatchingEngineTab({
       <div className="qgc-field qgc-field--row">
         <div className="qgc-field-meta">
           <div className="qgc-field-label">Allow Reassignment After Exhaustion</div>
-          {/* <div className="qgc-field-code">allow_reassignment_after_exhaustion · Boolean · default: true</div> */}
           <div className="qgc-field-desc">
             When enabled, workers who previously declined the gig can be reconsidered if no other
             worker accepts it — useful when worker supply is low.
@@ -1027,7 +951,6 @@ function MatchingEngineTab({
       <div className="qgc-field qgc-field--row">
         <div className="qgc-field-meta">
           <div className="qgc-field-label">Search Timeout</div>
-          {/* <div className="qgc-field-code">search_timeout_minutes · Integer</div> */}
           <div className="qgc-field-desc">
             How long the system continues searching for a worker after a gig is posted. After this
             period expires, the host is notified that no worker was found.
@@ -1048,7 +971,6 @@ function MatchingEngineTab({
       <div className="qgc-field qgc-field--row">
         <div className="qgc-field-meta">
           <div className="qgc-field-label">Max Dispatch Attempts</div>
-          {/* <div className="qgc-field-code">max_dispatch_attempts · Integer</div> */}
           <div className="qgc-field-desc">
             Maximum number of individual workers to try before stopping dispatch and marking
             the gig as unfilled.
@@ -1073,91 +995,91 @@ function MatchingEngineTab({
 // Tab: Notifications
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface NotifTemplate {
-  key: keyof NotificationsConfig;
-  label: string;
-  desc: string;
-  recipient: string;
-  color: string;
-}
+// interface NotifTemplate {
+//   key: keyof NotificationsConfig;
+//   label: string;
+//   desc: string;
+//   recipient: string;
+//   color: string;
+// }
 
-const NOTIF_TEMPLATES: NotifTemplate[] = [
-  {
-    key: "notification_template_suspension",
-    label: "Worker Suspended",
-    desc: "Message sent to a worker when their account is automatically suspended due to excessive gig declines.",
-    recipient: "Worker",
-    color: "var(--orange)",
-  },
-  {
-    key: "notification_template_dispatch",
-    label: "Gig Dispatched",
-    desc: "Notification sent to a worker when a gig has been assigned and they are expected to accept or decline.",
-    recipient: "Worker",
-    color: "var(--blue)",
-  },
-  {
-    key: "notification_template_timeout",
-    label: "Response Timeout",
-    desc: "Message sent to a worker when they fail to respond within the review window and the gig moves on.",
-    recipient: "Worker",
-    color: "var(--purple)",
-  },
-  {
-    key: "notification_template_no_worker_found",
-    label: "No Worker Found",
-    desc: "Message shown to the host when no available worker accepts the gig within the search timeout period.",
-    recipient: "Host",
-    color: "var(--red)",
-  },
-];
+// const NOTIF_TEMPLATES: NotifTemplate[] = [
+//   {
+//     key: "notification_template_suspension",
+//     label: "Worker Suspended",
+//     desc: "Message sent to a worker when their account is automatically suspended due to excessive gig declines.",
+//     recipient: "Worker",
+//     color: "var(--orange)",
+//   },
+//   {
+//     key: "notification_template_dispatch",
+//     label: "Gig Dispatched",
+//     desc: "Notification sent to a worker when a gig has been assigned and they are expected to accept or decline.",
+//     recipient: "Worker",
+//     color: "var(--blue)",
+//   },
+//   {
+//     key: "notification_template_timeout",
+//     label: "Response Timeout",
+//     desc: "Message sent to a worker when they fail to respond within the review window and the gig moves on.",
+//     recipient: "Worker",
+//     color: "var(--purple)",
+//   },
+//   {
+//     key: "notification_template_no_worker_found",
+//     label: "No Worker Found",
+//     desc: "Message shown to the host when no available worker accepts the gig within the search timeout period.",
+//     recipient: "Host",
+//     color: "var(--red)",
+//   },
+// ];
 
-function NotificationsTab({
-  config, set,
-}: {
-  config: NotificationsConfig;
-  set: <K extends keyof NotificationsConfig>(key: K, value: NotificationsConfig[K]) => void;
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div className="qgc-info">
-        <Info size={14} style={{ color: "var(--blue)", flexShrink: 0, marginTop: 1 }} />
-        <span>
-          These are plain-text notification messages. Keep them concise and informative.
-          Future versions may support dynamic variables like{" "}
-          <code style={{ fontFamily: "monospace", fontSize: 11 }}>{"{worker_name}"}</code>.
-        </span>
-      </div>
+// function NotificationsTab({
+//   config, set,
+// }: {
+//   config: NotificationsConfig;
+//   set: <K extends keyof NotificationsConfig>(key: K, value: NotificationsConfig[K]) => void;
+// }) {
+//   return (
+//     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+//       <div className="qgc-info">
+//         <Info size={14} style={{ color: "var(--blue)", flexShrink: 0, marginTop: 1 }} />
+//         <span>
+//           These are plain-text notification messages. Keep them concise and informative.
+//           Future versions may support dynamic variables like{" "}
+//           <code style={{ fontFamily: "monospace", fontSize: 11 }}>{"{worker_name}"}</code>.
+//         </span>
+//       </div>
 
-      {NOTIF_TEMPLATES.map(({ key, label, desc, recipient, color }) => (
-        <div key={key} className="qgc-card">
-          <div className="qgc-card-header">
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span className="qgc-card-title">{label}</span>
-              <span style={{
-                fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
-                background: `color-mix(in srgb, ${color} 12%, transparent)`,
-                color, letterSpacing: "0.04em",
-              }}>
-                → {recipient}
-              </span>
-            </div>
-          </div>
-          <div className="qgc-field qgc-field--col">
-            {/* <div className="qgc-field-code">{key}</div> */}
-            <div className="qgc-field-desc">{desc}</div>
-            <textarea
-              className="qgc-textarea"
-              value={config[key]}
-              onChange={(e) => set(key, e.target.value)}
-              rows={3}
-            />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
+//       {NOTIF_TEMPLATES.map(({ key, label, desc, recipient, color }) => (
+//         <div key={key} className="qgc-card">
+//           <div className="qgc-card-header">
+//             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+//               <span className="qgc-card-title">{label}</span>
+//               <span style={{
+//                 fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
+//                 background: `color-mix(in srgb, ${color} 12%, transparent)`,
+//                 color, letterSpacing: "0.04em",
+//               }}>
+//                 → {recipient}
+//               </span>
+//             </div>
+//           </div>
+//           <div className="qgc-field qgc-field--col">
+//             {/* <div className="qgc-field-code">{key}</div> */}
+//             <div className="qgc-field-desc">{desc}</div>
+//             <textarea
+//               className="qgc-textarea"
+//               value={config[key]}
+//               onChange={(e) => set(key, e.target.value)}
+//               rows={3}
+//             />
+//           </div>
+//         </div>
+//       ))}
+//     </div>
+//   );
+// }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared: Toggle
