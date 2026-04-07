@@ -60,6 +60,11 @@ export const MODULE_CONFIG: Record<string, ModuleConfig> = {
     variant: "indigo",
     accentColor: "var(--indigo, #6366f1)",
   },
+  quick_gig_config: {
+    label: "Quick Gig Config",
+    variant: "orange",
+    accentColor: "var(--orange)",
+  },
 } satisfies Record<string, ModuleConfig>;
 
 // ─── Action Config ────────────────────────────────────────────────────────────
@@ -100,6 +105,14 @@ export const ACTION_CONFIG: Record<string, ActionConfig> = {
   gig_updated: { label: "Gig Updated", variant: "orange" },
   gig_deleted: { label: "Gig Deleted", variant: "red"    },
   gig_closed:  { label: "Gig Closed",  variant: "amber"  },
+
+  // ── quick_gig_config  (module variant: orange) ────────────────────────────
+  config_updated: { label: "Config Updated", variant: "orange" },
+
+  // ── library  (module variant: indigo) ────────────────────────────────────
+  skill_created: { label: "Skill Added",   variant: "indigo" },
+  skill_updated: { label: "Skill Updated", variant: "indigo" },
+  skill_deleted: { label: "Skill Deleted", variant: "red"    },
 } satisfies Record<string, ActionConfig>;
 
 // ─── Accessors ────────────────────────────────────────────────────────────────

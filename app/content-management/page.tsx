@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect} from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/context/AuthContext";
@@ -27,6 +27,7 @@ import {
   Plus, Edit2, Trash2, Settings,
   Image, HelpCircle, Shield, ScrollText, Info, RefreshCw,
   X, Upload, AlertCircle,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
 import type { SectionState } from "@/hooks/usePerSectionData";
 
@@ -51,6 +52,8 @@ const SECTION_KEYS = SECTIONS.map((s) => s.key);
 
 const ITEM_BASED_SECTIONS = SECTION_KEYS.filter((k) => k !== "about_giggre");
 
+const ITEMS_PER_PAGE = 10;
+
 function getSectionMeta(key: ContentSectionKey) {
   return SECTIONS.find((s) => s.key === key)!;
 }
@@ -61,6 +64,7 @@ function formatDate(d: Date | null): string {
     month: "short", day: "numeric", year: "numeric",
   });
 }
+
 // ─── Skeleton & Error states ──────────────────────────────────────────────────
 
 function SectionSkeleton() {
@@ -96,6 +100,152 @@ function SectionError({ error, onRetry }: { error: string; onRetry: () => void }
   );
 }
 
+// ─── Pagination Component ─────────────────────────────────────────────────────
+
+function Pagination({
+  currentPage,
+  totalPages,
+  totalItems,
+  pageSize,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+
+  const startItem = (currentPage - 1) * pageSize + 1;
+  const endItem = Math.min(currentPage * pageSize, totalItems);
+
+  // Build page number array with ellipsis logic
+  const getPageNumbers = (): (number | "…")[] => {
+    if (totalPages <= 7) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    const pages: (number | "…")[] = [1];
+    if (currentPage > 3) pages.push("…");
+    for (
+      let i = Math.max(2, currentPage - 1);
+      i <= Math.min(totalPages - 1, currentPage + 1);
+      i++
+    ) {
+      pages.push(i);
+    }
+    if (currentPage < totalPages - 2) pages.push("…");
+    pages.push(totalPages);
+    return pages;
+  };
+
+  return (
+    <div className="pg-bar">
+      <style>{`
+        .pg-bar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding-top: 12px;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+        .pg-info {
+          font-size: 11px;
+          color: var(--text-muted);
+          white-space: nowrap;
+        }
+        .pg-controls {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+        .pg-btn {
+          min-width: 28px;
+          height: 28px;
+          padding: 0 6px;
+          border-radius: 6px;
+          border: 1px solid var(--border);
+          background: var(--bg-elevated);
+          color: var(--text-secondary);
+          font-size: 12px;
+          font-family: inherit;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.15s;
+          line-height: 1;
+        }
+        .pg-btn:hover:not(:disabled):not(.active) {
+          background: var(--bg-hover);
+          color: var(--text-primary);
+          border-color: var(--border-muted);
+        }
+        .pg-btn:disabled {
+          opacity: 0.38;
+          cursor: not-allowed;
+        }
+        .pg-btn.active {
+          background: var(--blue);
+          border-color: var(--blue);
+          color: #fff;
+          font-weight: 700;
+          cursor: default;
+        }
+        .pg-ellipsis {
+          min-width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          color: var(--text-muted);
+          user-select: none;
+        }
+      `}</style>
+
+      <span className="pg-info">
+        {startItem}–{endItem} of {totalItems} item{totalItems !== 1 ? "s" : ""}
+      </span>
+
+      <div className="pg-controls">
+        <button
+          className="pg-btn"
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage === 1}
+          title="Previous page"
+        >
+          <ChevronLeft size={13} />
+        </button>
+
+        {getPageNumbers().map((p, i) =>
+          p === "…" ? (
+            <span key={`ellipsis-${i}`} className="pg-ellipsis">…</span>
+          ) : (
+            <button
+              key={p}
+              className={`pg-btn${p === currentPage ? " active" : ""}`}
+              onClick={() => p !== currentPage && onPageChange(p as number)}
+              disabled={p === currentPage}
+            >
+              {p}
+            </button>
+          )
+        )}
+
+        <button
+          className="pg-btn"
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage === totalPages}
+          title="Next page"
+        >
+          <ChevronRight size={13} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Item Form ────────────────────────────────────────────────────────────────
 
 function ItemForm({
@@ -121,9 +271,8 @@ function ItemForm({
   const set = (key: string, value: any) =>
     setForm((prev: any) => ({ ...prev, [key]: value }));
 
-  // Check if current sort number is already taken (but not by this item if editing)
-  const currentSortTaken = 
-    sectionKey === "carousel_items" && 
+  const currentSortTaken =
+    sectionKey === "carousel_items" &&
     form.sortNumber > 0 &&
     takenSortNumbers.filter(n => n !== (isEdit ? initial.sortNumber : null)).includes(form.sortNumber);
 
@@ -145,19 +294,6 @@ function ItemForm({
         .if-upload:hover { border-color: var(--blue); color: var(--blue); }
       `}</style>
 
-      {/* <label className="if-toggle-row" style={{ userSelect: "none" }}>
-        <input
-          type="checkbox"
-          checked={!!form.published}
-          onChange={(e) => set("published", e.target.checked)}
-          disabled={loading}
-        />
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)" }}>Published</div>
-          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Visible to app users</div>
-        </div>
-      </label> */}
-
       {sectionKey === "carousel_items" && (
         <>
           <div>
@@ -171,14 +307,6 @@ function ItemForm({
             <label className="if-label">Image Name *</label>
             <input className="if-input" value={form.imageName ?? ""} onChange={(e) => set("imageName", e.target.value)} disabled={loading} placeholder="Display name for this carousel item…" />
           </div>
-          {/* <div>
-            <label className="if-label">Author</label>
-            <input className="if-input" value={form.author ?? ""} onChange={(e) => set("author", e.target.value)} disabled={loading} placeholder="Author name…" />
-          </div>
-          <div>
-            <label className="if-label">Text *</label>
-            <textarea className="if-textarea" value={form.text ?? ""} onChange={(e) => set("text", e.target.value)} disabled={loading} placeholder="Carousel slide text…" />
-          </div> */}
         </>
       )}
       {hasCategories(sectionKey) && (
@@ -202,12 +330,12 @@ function ItemForm({
       <div className="if-row">
         <div>
           <label className="if-label">Sort Number</label>
-          <input 
-            className="if-input" 
-            type="number" 
-            min={0} 
-            value={form.sortNumber ?? 0} 
-            onChange={(e) => set("sortNumber", parseInt(e.target.value) || 0)} 
+          <input
+            className="if-input"
+            type="number"
+            min={0}
+            value={form.sortNumber ?? 0}
+            onChange={(e) => set("sortNumber", parseInt(e.target.value) || 0)}
             disabled={loading}
             style={{
               borderColor: currentSortTaken ? "var(--red)" : undefined,
@@ -315,9 +443,9 @@ function SectionPanel({
   const [deleting, setDeleting] = useState<ContentItem | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
 
-  // Get all taken sort numbers for carousel items (excluding 0 which means hidden)
-  const takenSortNumbers = 
+  const takenSortNumbers =
     sectionKey === "carousel_items" && sectionState.data
       ? sectionState.data.items
           .map(item => (item as any).sortNumber)
@@ -339,15 +467,28 @@ function SectionPanel({
     );
   });
 
+  // Pagination calculations
+  const totalItems = filteredItems.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / ITEMS_PER_PAGE));
+  // Clamp currentPage in case items are deleted or search narrows results
+  const safePage = Math.min(currentPage, totalPages);
+  const pageStartIndex = (safePage - 1) * ITEMS_PER_PAGE;
+  const pagedItems = filteredItems.slice(pageStartIndex, pageStartIndex + ITEMS_PER_PAGE);
+
+  // Reset to page 1 when search changes
+  const handleSearchChange = (value: string) => {
+    setSearch(value);
+    setCurrentPage(1);
+  };
+
   const handleCreate = async (form: Partial<ContentItem>) => {
-    // Validate carousel sort number
     if (sectionKey === "carousel_items" && (form.sortNumber ?? 0) > 0) {
       if (takenSortNumbers.includes(form.sortNumber ?? 0)) {
         toast.error("Invalid sort number", "This sort number is already taken");
         return;
       }
     }
-    
+
     const result = await createItem(sectionKey, meta.label, form);
     if (result.success) {
       toast.success("Item created", meta.label);
@@ -360,8 +501,7 @@ function SectionPanel({
 
   const handleEdit = async (form: Partial<ContentItem>) => {
     if (!editing) return;
-    
-    // Validate carousel sort number
+
     if (sectionKey === "carousel_items" && (form.sortNumber ?? 0) > 0) {
       const sortNumberTaken = takenSortNumbers.filter(n => n !== editing.sortNumber).includes(form.sortNumber ?? 0);
       if (sortNumberTaken) {
@@ -369,7 +509,7 @@ function SectionPanel({
         return;
       }
     }
-    
+
     const result = await updateItem(sectionKey, meta.label, editing, form);
     if (result.success) {
       toast.success("Item updated");
@@ -386,21 +526,15 @@ function SectionPanel({
     if (result.success) {
       toast.success("Item deleted");
       setDeleting(null);
+      // If last item on current page was deleted, go back one page
+      const newTotal = filteredItems.length - 1;
+      const newTotalPages = Math.max(1, Math.ceil(newTotal / ITEMS_PER_PAGE));
+      if (safePage > newTotalPages) setCurrentPage(newTotalPages);
       onRefresh();
     } else {
       toast.error("Failed to delete item", result.error);
     }
   };
-
-  // const handleTogglePublish = async (item: ContentItem) => {
-  //   const result = await togglePublish(sectionKey, meta.label, item);
-  //   if (result.success) {
-  //     toast.success(item.published ? "Item unpublished" : "Item published");
-  //     onRefresh();
-  //   } else {
-  //     toast.error("Failed to toggle publish", result.error);
-  //   }
-  // };
 
   const handleSaveSettings = async (opts: SectionOptions) => {
     const result = await saveSettings(sectionKey, meta.label, opts, data.options);
@@ -412,8 +546,6 @@ function SectionPanel({
       toast.error("Failed to save settings", result.error);
     }
   };
-
-  // const publishedCount = data.items.filter((i) => i.published !== false).length;
 
   return (
     <div>
@@ -478,9 +610,13 @@ function SectionPanel({
           <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ color: "var(--text-muted)", flexShrink: 0 }}>
             <circle cx="11" cy="11" r="8" /><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35" />
           </svg>
-          <input placeholder="Search items…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input
+            placeholder="Search items…"
+            value={search}
+            onChange={(e) => handleSearchChange(e.target.value)}
+          />
           {search && (
-            <button style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex" }} onClick={() => setSearch("")}>
+            <button style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex" }} onClick={() => handleSearchChange("")}>
               <X size={11} />
             </button>
           )}
@@ -517,22 +653,20 @@ function SectionPanel({
             </tr>
           </thead>
           <tbody>
-            {filteredItems.length === 0 ? (
+            {pagedItems.length === 0 ? (
               <tr>
                 <td colSpan={hasCategories(sectionKey) ? 6 : 5} className="cm-empty">
                   No items found.{!search && ` Click "Add Item" to create the first one.`}
                 </td>
               </tr>
             ) : (
-              filteredItems.map((item) => (
+              pagedItems.map((item) => (
                 <tr key={item.id}>
                   {hasCategories(sectionKey) && (
                     <td><Badge variant="blue">{(item as any).category || "—"}</Badge></td>
                   )}
                   <td>
                     <div className="cm-title">{getItemTitle(item, sectionKey)}</div>
-                    {/* {("body" in item && (item as any).body) && <div className="cm-body">{(item as any).body}</div>}
-                    {("text" in item && (item as any).text) && <div className="cm-body">{(item as any).text}</div>} */}
                   </td>
                   <td style={{ fontFamily: "'Space Mono', monospace" }}>{item.sortNumber}</td>
                   <td>
@@ -543,13 +677,6 @@ function SectionPanel({
                   <td>{formatDate(item.dateUpdated)}</td>
                   <td>
                     <div className="cm-actions">
-                      {/* <button
-                            className="cm-icon-btn"
-                            title={item.published !== false ? "Unpublish" : "Publish"}
-                            onClick={() => handleTogglePublish(item)}
-                          >
-                            {item.published !== false ? <EyeOff size={12} /> : <Eye size={12} />}
-                          </button> */}
                       <button className="cm-icon-btn" title="Edit" onClick={() => setEditing(item)}>
                         <Edit2 size={12} />
                       </button>
@@ -564,6 +691,15 @@ function SectionPanel({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      <Pagination
+        currentPage={safePage}
+        totalPages={totalPages}
+        totalItems={totalItems}
+        pageSize={ITEMS_PER_PAGE}
+        onPageChange={setCurrentPage}
+      />
 
       {sectionState.lastFetched && (
         <div style={{ fontSize: 11, color: "var(--text-muted)", paddingTop: 8 }}>
@@ -635,17 +771,14 @@ export default function ContentManagementPage() {
   const handleTabChange = useCallback(
     (key: ContentSectionKey) => {
       setActiveTab(key);
-      if (key !== "about_giggre") fetchSection(key);
     },
-    [setActiveTab, fetchSection],
+    [setActiveTab],
   );
 
-  const hasMounted = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (node && activeTab !== "about_giggre") fetchSection(activeTab);
-    },
-    [],
-  );
+  useEffect(() => {
+    if (activeTab !== "about_giggre") fetchSection(activeTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const tabConfigs = SECTIONS.map((s) => {
     if (s.key === "about_giggre") {
@@ -665,7 +798,7 @@ export default function ContentManagementPage() {
         .cm-tab-content { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; min-height: 320px; }
       `}</style>
 
-      <div className="cm-page" ref={hasMounted}>
+      <div className="cm-page">
         <TabBar tabs={tabConfigs} activeTab={activeTab} onChange={handleTabChange} />
 
         <div className="cm-tab-content">

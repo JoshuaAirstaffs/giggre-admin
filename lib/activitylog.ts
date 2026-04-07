@@ -34,11 +34,20 @@ export type GigLogAction =
   | "gig_deleted"
   | "gig_closed";
 
+export type QuickGigLogAction = "config_updated";
+
+export type SkillLogAction =
+  | "skill_created"
+  | "skill_updated"
+  | "skill_deleted";
+
 export type LogAction =
   | AdminLogAction
   | ContentLogAction
   | UserLogAction
-  | GigLogAction;
+  | GigLogAction
+  | QuickGigLogAction
+  | SkillLogAction;
 
 export type LogModule =
   | "admin_management"
@@ -48,7 +57,8 @@ export type LogModule =
   | "reports"
   | "settings"
   | "announcements"
-  | "library";
+  | "library"
+  | "quick_gig_config";
 
 export type ContentSectionKey =
   | "carousel_items"
@@ -137,6 +147,20 @@ export const buildDescription = {
 
   contentSettingsUpdated: (sectionLabel: string) =>
     `Updated display settings for ${sectionLabel}`,
+
+  configUpdated: (section: string) =>
+    `Updated Quick Gig configuration — ${section}`,
+
+  // ── Skills library ────────────────────────────────────────────────────────
+
+  skillCreated: (skillId: string, skillName: string) =>
+    `Added skill ${skillId} — "${skillName}"`,
+
+  skillUpdated: (skillId: string, oldName: string, newName: string) =>
+    `Renamed skill ${skillId} from "${oldName}" to "${newName}"`,
+
+  skillDeleted: (skillId: string, skillName: string) =>
+    `Deleted skill ${skillId} — "${skillName}"`,
 
   // // ── User management ───────────────────────────────────────────────────────
 

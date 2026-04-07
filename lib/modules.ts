@@ -30,7 +30,7 @@ export const ALL_MODULES: ModuleMeta[] = [
   { key: "reports",            label: "Reports",                 href: "/reports" },
   { key: "settings",           label: "Settings",                href: "/settings" },
   { key: "library-gsin",       label: "Skills (GSIN Library)",   href: "/library-gsin" },
-  { key: "quick-gigs",         label: "Quick Gigs Suspensions",  href: "/quick-gigs" },
+  { key: "quick-gigs",         label: "Quick Gigs Configuration",  href: "/quick-gigs" },
   { key: "activity-logs",      label: "Activity Logs",           href: "/activity-logs" },
   { key: "content-management", label: "Content Management",      href: "/content-management" },
 ];

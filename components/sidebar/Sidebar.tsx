@@ -40,7 +40,7 @@ const LIBRARY_ITEMS: NavItem[] = [
 ];
 
 const QG_ITEMS: NavItem[] = [
-  { href: "/quick-gigs", icon: Library, label: "Quick Gigs Suspensions", module: "quick-gigs" },
+  { href: "/quick-gigs", icon: Library, label: "Quick Gigs Configuration", module: "quick-gigs" },
 ];
 
 const SYSTEM_ITEMS: NavItem[] = [
