@@ -1,15 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, Fragment } from "react";
+import { useState, useEffect, useCallback, useMemo, Fragment, memo } from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
 import Button from "@/components/ui/Button";
+import Modal from "@/components/ui/Modal";
 import {
   collection,
   getDocs,
-  query,
-  where,
-  orderBy,
   Timestamp,
+  doc,
+  updateDoc,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import {
@@ -17,16 +17,13 @@ import {
   Search,
   RefreshCw,
   ChevronDown,
-  ChevronUp,
   MapPin,
-  Users,
-  Clock,
-  Layers,
   Filter,
   X,
-  AlertCircle,
 } from "lucide-react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
+import { useAuth } from "@/context/AuthContext";
+import { writeLog, buildDescription } from "@/lib/activitylog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,22 +41,31 @@ interface GeoPoint {
   longitude: number;
 }
 
-interface Gig {
+type GigType = "offered" | "open" | "quick";
+
+interface GigBase {
   id: string;
+  gigType: GigType;
   title: string;
   description?: string;
   status: string;
   category?: string;
   vacancy?: number;
   slot?: number;
-  salary?: string;
+  salary?: string | number;
   postedBy?: string;
   location?: string | GeoPoint | null;
   createdAt: Timestamp | null;
   applications: Application[];
+  cancelledByAdmin?: boolean;
+  cancellationReason?: string;
+  cancellationTicketID?: string;
 }
 
+type Gig = GigBase & Record<string, unknown>;
+
 type StatusFilter = "all" | "available" | "unavailable";
+type GigTypeFilter = "all" | GigType;
 type SortOption = "newest" | "oldest" | "pay-high" | "pay-low";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -96,10 +102,65 @@ function isAvailable(status: string): boolean {
   return status?.toLowerCase() === "available";
 }
 
+function formatFieldLabel(key: string): string {
+  return key
+    .replace(/([A-Z])/g, " $1")
+    .replace(/^./, (s) => s.toUpperCase())
+    .trim();
+}
+
+function formatFieldValue(val: unknown): string {
+  if (val === null || val === undefined) return "—";
+  if (val instanceof Timestamp) return formatDate(val);
+  if (
+    typeof val === "object" &&
+    "latitude" in (val as object) &&
+    "longitude" in (val as object)
+  ) {
+    const gp = val as GeoPoint;
+    return `${gp.latitude.toFixed(5)}, ${gp.longitude.toFixed(5)}`;
+  }
+  if (typeof val === "boolean") return val ? "Yes" : "No";
+  if (typeof val === "number") return String(val);
+  if (typeof val === "string") return val || "—";
+  if (Array.isArray(val)) return val.join(", ") || "—";
+  return JSON.stringify(val);
+}
+
+const GIG_TYPE_LABELS: Record<GigType, string> = {
+  offered: "Offered",
+  open: "Open",
+  quick: "Quick",
+};
+
+const GIG_COLLECTIONS: Record<GigType, string> = {
+  offered: "offered_gigs",
+  open: "open_gigs",
+  quick: "quick_gigs",
+};
+
+// Fields shown explicitly in the Details section — excluded from "Additional Details"
+const BASE_FIELDS = new Set([
+  "id",
+  "gigType",
+  "title",
+  "description",
+  "status",
+  "category",
+  "vacancy",
+  "slot",
+  "salary",
+  "postedBy",
+  "location",
+  "createdAt",
+  "applications",
+]);
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function LiveGigsPage() {
   useAuthGuard({ module: "live-gigs" });
+  const { user } = useAuth();
 
   const PAGE_SIZE = 10;
 
@@ -108,49 +169,99 @@ export default function LiveGigsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [gigTypeFilter, setGigTypeFilter] = useState<GigTypeFilter>("all");
   const [sort, setSort] = useState<SortOption>("newest");
   const [page, setPage] = useState(1);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [cancelModalGig, setCancelModalGig] = useState<Gig | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelTicketID, setCancelTicketId] = useState("");
+
+  const openCancelModal = useCallback((gig: Gig) => {
+    setCancelModalGig(gig);
+    setCancelReason("");
+    setCancelTicketId("");
+    setCancelError(null);
+  }, []);
+
+  const cancelGig = useCallback(async () => {
+    const gig = cancelModalGig;
+    if (!gig || cancellingId) return;
+    setCancellingId(gig.id);
+    setCancelError(null);
+    try {
+      await updateDoc(doc(db, GIG_COLLECTIONS[gig.gigType], gig.id), {
+        status: "cancelled",
+        cancelledByAdmin: true,
+        cancellationReason: cancelReason.trim() || null,
+        cancellationTicketID: cancelTicketID.trim() || null,
+      });
+      setGigs((prev) =>
+        prev.map((g) => (g.id === gig.id ? {
+          ...g,
+          status: "cancelled",
+          cancelledByAdmin: true,
+          cancellationReason: cancelReason.trim() || undefined,
+          cancellationTicketID: cancelTicketID.trim() || undefined,
+        } : g))
+      );
+      await writeLog({
+        actorId:     user!.uid,
+        actorName:   user!.displayName ?? "Unknown",
+        actorEmail:  user!.email ?? "",
+        module:      "gig_management",
+        action:      "gig_cancelled",
+        description: buildDescription.gigCancelled(gig.title || "Untitled Gig", gig.gigType),
+        targetId:    gig.id,
+        targetName:  gig.title || "Untitled Gig",
+        meta: {
+          other: {
+            gigType: gig.gigType,
+            collection: GIG_COLLECTIONS[gig.gigType],
+            cancellationReason: cancelReason.trim() || null,
+            cancellationTicketID: cancelTicketID.trim() || null,
+          },
+        },
+      });
+      setCancelModalGig(null);
+    } catch (err) {
+      console.error("Failed to cancel gig:", err);
+      setCancelError(`Failed to cancel "${gig.title || "gig"}". Please try again.`);
+    } finally {
+      setCancellingId(null);
+    }
+  }, [cancelModalGig, cancellingId, cancelReason, cancelTicketID, user]);
 
   const fetchLiveGigs = useCallback(async () => {
     setLoading(true);
+    setFetchError(null);
     try {
-      const gigsSnapshot = await getDocs(collection(db, "gigs"));
-      const rawGigs = gigsSnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as Omit<Gig, "applications">[];
+      const types: GigType[] = gigTypeFilter === "all"
+        ? ["offered", "open", "quick"]
+        : [gigTypeFilter];
 
-      const gigsWithApplications = await Promise.all(
-        rawGigs.map(async (gig) => {
-          const appsSnapshot = await getDocs(
-            query(collection(db, "applications"), where("gigId", "==", gig.id))
-          );
-          const applications = await Promise.all(
-            appsSnapshot.docs.map(async (appDoc) => {
-              const appData = appDoc.data();
-              const userSnapshot = await getDocs(
-                query(collection(db, "users"), where("uid", "==", appData.userId))
-              );
-              const userData = userSnapshot.docs[0]?.data() ?? null;
-              return {
-                id: appDoc.id,
-                ...appData,
-                applicantName:
-                  userData?.name ?? userData?.displayName ?? "Unknown",
-              } as Application;
-            })
-          );
-          return { ...gig, applications };
-        })
+      const snaps = await Promise.all(
+        types.map((t) => getDocs(collection(db, GIG_COLLECTIONS[t])))
       );
 
-      setGigs(gigsWithApplications);
+      const rawGigs = snaps.flatMap((snap, i) =>
+        snap.docs.map((d) => ({
+          id: d.id,
+          gigType: types[i],
+          ...d.data(),
+        }))
+      ) as Omit<Gig, "applications">[];
+
+      setGigs(rawGigs.map((g) => ({ ...g, applications: [] as Application[] })) as Gig[]);
     } catch (err) {
       console.error("Failed to fetch gigs:", err);
+      setFetchError("Failed to load gigs. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [gigTypeFilter]);
 
   useEffect(() => {
     fetchLiveGigs();
@@ -159,7 +270,11 @@ export default function LiveGigsPage() {
   // ── Derived ──────────────────────────────────────────────────────────────────
 
   const filtered = useMemo(() => {
-    let list = gigs;
+    // Always shallow-copy so sort never mutates gigs state
+    let list = gigs.slice();
+    if (gigTypeFilter !== "all") {
+      list = list.filter((g) => g.gigType === gigTypeFilter);
+    }
     if (statusFilter !== "all") {
       list = list.filter((g) =>
         statusFilter === "available" ? isAvailable(g.status) : !isAvailable(g.status)
@@ -175,35 +290,50 @@ export default function LiveGigsPage() {
           formatLocation(g.location)?.toLowerCase().includes(q)
       );
     }
-    list = [...list].sort((a, b) => {
+    list.sort((a, b) => {
       if (sort === "newest") return (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0);
       if (sort === "oldest") return (a.createdAt?.seconds ?? 0) - (b.createdAt?.seconds ?? 0);
-      if (sort === "pay-high") return (parseFloat(b.salary ?? "0") || 0) - (parseFloat(a.salary ?? "0") || 0);
-      if (sort === "pay-low") return (parseFloat(a.salary ?? "0") || 0) - (parseFloat(b.salary ?? "0") || 0);
+      if (sort === "pay-high")
+        return (parseFloat(String(b.salary ?? "0")) || 0) - (parseFloat(String(a.salary ?? "0")) || 0);
+      if (sort === "pay-low")
+        return (parseFloat(String(a.salary ?? "0")) || 0) - (parseFloat(String(b.salary ?? "0")) || 0);
       return 0;
     });
     return list;
-  }, [gigs, search, statusFilter, sort]);
+  }, [gigs, search, statusFilter, gigTypeFilter, sort]);
 
   const stats = useMemo(() => {
     const total = gigs.length;
     const available = gigs.filter((g) => isAvailable(g.status)).length;
-    const totalApps = gigs.reduce((sum, g) => sum + (g.applications?.length ?? 0), 0);
-    const withApps = gigs.filter((g) => (g.applications?.length ?? 0) > 0).length;
-    return { total, available, unavailable: total - available, totalApps, withApps };
+    // const totalApps = gigs.reduce((sum, g) => sum + (g.applications?.length ?? 0), 0);
+    const offered = gigs.filter((g) => g.gigType === "offered").length;
+    const open = gigs.filter((g) => g.gigType === "open").length;
+    const quick = gigs.filter((g) => g.gigType === "quick").length;
+    return { total, available, unavailable: total - available, offered, open, quick };
   }, [gigs]);
 
   // Reset to page 1 whenever filters/sort change
-  useEffect(() => { setPage(1); setExpandedId(null); }, [search, statusFilter, sort]);
+  useEffect(() => {
+    setPage(1);
+    setExpandedId(null);
+  }, [search, statusFilter, gigTypeFilter, sort]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+
+  // Clamp page if a cancel shrinks filtered.length below current page
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [totalPages, page]);
+
   const paginated = useMemo(
     () => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-    [filtered, page, PAGE_SIZE]
+    [filtered, page]
   );
 
   const toggleExpand = (id: string) =>
     setExpandedId((prev) => (prev === id ? null : id));
+
+  const hasActiveFilter = !!(search || statusFilter !== "all" || gigTypeFilter !== "all");
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -237,7 +367,6 @@ export default function LiveGigsPage() {
         }
         .lg-stat-val { font-size: 22px; font-weight: 700; color: var(--text-primary); font-family: 'Space Mono', monospace; line-height: 1.2; }
         .lg-stat-label { font-size: 11px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
-        .lg-stat-accent { width: 3px; height: 20px; border-radius: 2px; flex-shrink: 0; }
 
         /* ── Controls ── */
         .lg-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -291,10 +420,14 @@ export default function LiveGigsPage() {
         }
         .lg-badge--available { background: rgba(16,185,129,0.12); color: var(--green); }
         .lg-badge--unavailable { background: rgba(239,68,68,0.12); color: var(--red); }
+        .lg-badge--completed { background: rgba(59,130,246,0.12); color: var(--blue); }
         .lg-badge--category { background: rgba(59,130,246,0.12); color: var(--blue); }
         .lg-badge--pending { background: rgba(245,158,11,0.12); color: var(--amber); }
         .lg-badge--accepted { background: rgba(16,185,129,0.12); color: var(--green); }
         .lg-badge--rejected { background: rgba(239,68,68,0.12); color: var(--red); }
+        .lg-badge--type-offered { background: rgba(245,158,11,0.12); color: var(--amber); }
+        .lg-badge--type-open { background: rgba(59,130,246,0.12); color: var(--blue); }
+        .lg-badge--type-quick { background: rgba(139,92,246,0.12); color: var(--purple); }
         .lg-badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 
         /* ── Number chip ── */
@@ -310,7 +443,7 @@ export default function LiveGigsPage() {
         .lg-expand-detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
         .lg-expand-detail { display: flex; flex-direction: column; gap: 2px; }
         .lg-expand-detail-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-        .lg-expand-detail-val { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+        .lg-expand-detail-val { font-size: 13px; color: var(--text-primary); font-weight: 500; word-break: break-word; }
 
         /* ── Applicants list ── */
         .lg-applicants { display: flex; flex-direction: column; gap: 6px; }
@@ -355,6 +488,16 @@ export default function LiveGigsPage() {
         }
         .lg-page-ellipsis { font-size: 12px; color: var(--text-muted); padding: 0 4px; }
 
+        /* ── Cancel button ── */
+        .lg-cancel-btn {
+          padding: 4px 10px; border-radius: var(--radius-sm);
+          border: 1px solid rgba(239,68,68,0.35); background: rgba(239,68,68,0.08);
+          color: var(--red); font-size: 11px; font-weight: 600; font-family: inherit;
+          cursor: pointer; transition: all 0.12s; white-space: nowrap;
+        }
+        .lg-cancel-btn:hover:not(:disabled) { background: rgba(239,68,68,0.18); border-color: var(--red); }
+        .lg-cancel-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
         /* ── Sort select ── */
         .lg-sort {
           padding: 7px 28px 7px 10px; appearance: none;
@@ -368,32 +511,40 @@ export default function LiveGigsPage() {
 
       <div className="lg-wrap">
 
+        {/* ── Fetch error banner ── */}
+        {fetchError && (
+          <div style={{
+            padding: "10px 16px", borderRadius: "var(--radius-sm)",
+            background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
+            color: "var(--red)", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            {fetchError}
+            <button onClick={fetchLiveGigs} style={{ background: "none", border: "none", color: "var(--red)", fontSize: 12, cursor: "pointer", fontWeight: 600, padding: "0 4px" }}>
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* ── Cancel error banner ── */}
+        {cancelError && (
+          <div style={{
+            padding: "10px 16px", borderRadius: "var(--radius-sm)",
+            background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
+            color: "var(--red)", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            {cancelError}
+            <button onClick={() => setCancelError(null)} style={{ background: "none", border: "none", color: "var(--red)", fontSize: 16, cursor: "pointer", lineHeight: 1, padding: "0 4px" }}>
+              ×
+            </button>
+          </div>
+        )}
+
         {/* ── Stats bar ── */}
         <div className="lg-stats">
-          <StatCard
-            value={stats.total}
-            label="Total Gigs"
-            color="var(--blue)"
-            loading={loading}
-          />
-          <StatCard
-            value={stats.available}
-            label="Available"
-            color="var(--green)"
-            loading={loading}
-          />
-          <StatCard
-            value={stats.unavailable}
-            label="Unavailable"
-            color="var(--red)"
-            loading={loading}
-          />
-          <StatCard
-            value={stats.totalApps}
-            label="Total Applications"
-            color="var(--purple)"
-            loading={loading}
-          />
+          <StatCard value={stats.total} label="Total Gigs" color="var(--blue)" loading={loading} />
+          <StatCard value={stats.available} label="Available" color="var(--green)" loading={loading} />
+          <StatCard value={stats.unavailable} label="Unavailable" color="var(--red)" loading={loading} />
+          {/* <StatCard value={stats.totalApps} label="Total Applications" color="var(--purple)" loading={loading} /> */}
         </div>
 
         {/* ── Controls ── */}
@@ -407,6 +558,21 @@ export default function LiveGigsPage() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+
+          {/* Gig type filter */}
+          <div className="lg-filter-group">
+            {(["all", "open", "offered", "quick"] as GigTypeFilter[]).map((f) => (
+              <button
+                key={f}
+                className={`lg-filter-btn${gigTypeFilter === f ? " lg-filter-btn--active" : ""}`}
+                onClick={() => setGigTypeFilter(f)}
+              >
+                {f === "all" ? "All Types" : `${GIG_TYPE_LABELS[f as GigType]} Gigs`}
+              </button>
+            ))}
+          </div>
+
+          {/* Status filter */}
           <div className="lg-filter-group">
             {(["all", "available", "unavailable"] as StatusFilter[]).map((f) => (
               <button
@@ -414,10 +580,11 @@ export default function LiveGigsPage() {
                 className={`lg-filter-btn${statusFilter === f ? " lg-filter-btn--active" : ""}`}
                 onClick={() => setStatusFilter(f)}
               >
-                {f === "all" ? "All" : f === "available" ? "Available" : "Unavailable"}
+                {f === "all" ? "All Status" : f === "available" ? "Available" : "Unavailable"}
               </button>
             ))}
           </div>
+
           <select
             className="lg-sort"
             value={sort}
@@ -429,12 +596,17 @@ export default function LiveGigsPage() {
             <option value="pay-high">Highest Pay</option>
             <option value="pay-low">Lowest Pay</option>
           </select>
-          {(search || statusFilter !== "all") && (
+
+          {hasActiveFilter && (
             <Button
               variant="ghost"
               size="sm"
               icon={X}
-              onClick={() => { setSearch(""); setStatusFilter("all"); }}
+              onClick={() => {
+                setSearch("");
+                setStatusFilter("all");
+                setGigTypeFilter("all");
+              }}
             >
               Clear
             </Button>
@@ -457,18 +629,19 @@ export default function LiveGigsPage() {
           {loading ? (
             <LoadingSkeleton />
           ) : filtered.length === 0 ? (
-            <EmptyState hasFilter={!!(search || statusFilter !== "all")} />
+            <EmptyState hasFilter={hasActiveFilter} />
           ) : (
             <table className="lg-table">
               <thead>
                 <tr>
                   <th>Gig</th>
-                  {/* <th>Category</th> */}
+                  <th>Type</th>
                   <th>Status</th>
                   <th>Vacancies</th>
                   <th>Slots</th>
                   <th>Applications</th>
                   <th>Posted</th>
+                  <th>Actions</th>
                   <th style={{ width: 32 }} />
                 </tr>
               </thead>
@@ -476,36 +649,47 @@ export default function LiveGigsPage() {
                 {paginated.map((gig) => {
                   const expanded = expandedId === gig.id;
                   const appCount = gig.applications?.length ?? 0;
+                  const typeBadgeClass = `lg-badge--type-${gig.gigType}`;
+                  const loc = formatLocation(gig.location);
                   return (
-    <Fragment key={gig.id}>
+                    <Fragment key={gig.id}>
                       <tr
-                        // key={gig.id}
                         className={`lg-row${expanded ? " lg-row--expanded" : ""}`}
                         onClick={() => toggleExpand(gig.id)}
                       >
                         <td>
                           <div className="lg-gig-title">{gig.title || "Untitled Gig"}</div>
-                          {formatLocation(gig.location) && (
+                          {loc && (
                             <div className="lg-gig-meta">
                               <MapPin size={10} />
-                              {formatLocation(gig.location)}
+                              {loc}
                             </div>
                           )}
-                          {gig.postedBy && !formatLocation(gig.location) && (
+                          {gig.postedBy && !loc && (
                             <div className="lg-gig-meta">by {gig.postedBy}</div>
                           )}
                         </td>
-                        {/* <td>
-                          {gig.category ? (
-                            <span className="lg-badge lg-badge--category">{gig.category}</span>
-                          ) : (
-                            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>—</span>
-                          )}
-                        </td> */}
                         <td>
-                          <span className={`lg-badge ${isAvailable(gig.status) ? "lg-badge--available" : "lg-badge--unavailable"}`}>
+                          <span className={`lg-badge ${typeBadgeClass}`}>
+                            {GIG_TYPE_LABELS[gig.gigType]}
+                          </span>
+                        </td>
+                        <td>
+                          <span
+                            className={`lg-badge ${
+                              isAvailable(gig.status)
+                                ? "lg-badge--available"
+                                : gig.status?.toLowerCase() === "completed"
+                                  ? "lg-badge--completed"
+                                  : "lg-badge--unavailable"
+                            }`}
+                          >
                             <span className="lg-badge-dot" />
-                            {isAvailable(gig.status) ? "Available" : gig.status || "Unknown"}
+                            {isAvailable(gig.status)
+                              ? "Available"
+                              : gig.status
+                                  ? gig.status.charAt(0).toUpperCase() + gig.status.slice(1)
+                                  : "Unknown"}
                           </span>
                         </td>
                         <td>
@@ -527,7 +711,45 @@ export default function LiveGigsPage() {
                             {formatDateShort(gig.createdAt)}
                           </span>
                         </td>
-                        <td onClick={(e) => { e.stopPropagation(); toggleExpand(gig.id); }}>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          {gig.status?.toLowerCase() !== "cancelled" && gig.status?.toLowerCase() !== "completed" && (
+                            <button
+                              className="lg-cancel-btn"
+                              disabled={cancellingId === gig.id}
+                              onClick={(e) => { e.stopPropagation(); openCancelModal(gig); }}
+                            >
+                              {cancellingId === gig.id ? "Cancelling…" : "Cancel Gig"}
+                            </button>
+                          )}
+                          {gig.status?.toLowerCase() === "cancelled" && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                              <span style={{ fontSize: 11, color: "var(--text-muted)", fontStyle: "italic" }}>
+                                {gig.cancelledByAdmin ? "Cancelled by Admin" : "Cancelled"}
+                              </span>
+                              {gig.cancelledByAdmin && gig.cancellationTicketID && (
+                                <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                                  Ticket: <span style={{ fontWeight: 600, color: "var(--text-secondary)" }}>{gig.cancellationTicketID}</span>
+                                </span>
+                              )}
+                              {gig.cancelledByAdmin && gig.cancellationReason && (
+                                <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                                  Reason: <span style={{ color: "var(--text-secondary)" }}>{gig.cancellationReason}</span>
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {gig.status?.toLowerCase() === "completed" && (
+                            <span style={{ fontSize: 11, color: "var(--blue)", fontStyle: "italic" }}>
+                              Completed
+                            </span>
+                          )}
+                        </td>
+                        <td
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleExpand(gig.id);
+                          }}
+                        >
                           <ChevronDown
                             size={14}
                             className={`lg-chevron${expanded ? " lg-chevron--open" : ""}`}
@@ -536,13 +758,13 @@ export default function LiveGigsPage() {
                       </tr>
 
                       {expanded && (
-                        <tr className="lg-expand" >
-                          <td colSpan={8}>
+                        <tr className="lg-expand">
+                          <td colSpan={9}>
                             <GigExpandPanel gig={gig} />
                           </td>
                         </tr>
                       )}
-    </Fragment>
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -550,7 +772,7 @@ export default function LiveGigsPage() {
           )}
 
           {/* Pagination */}
-          {!loading && filtered.length > 0 && totalPages > 1 && (
+          {!loading && filtered.length > 0 && (
             <div className="lg-pagination">
               <span className="lg-page-info">
                 Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length}
@@ -615,13 +837,80 @@ export default function LiveGigsPage() {
           )}
         </div>
       </div>
+
+      {/* Cancel Gig Modal */}
+      {cancelModalGig && (
+        <Modal
+          open
+          onClose={() => { if (!cancellingId) { setCancelModalGig(null); setCancelError(null); } }}
+          title="Cancel Gig"
+          description={`"${cancelModalGig.title || "Untitled Gig"}" · ${GIG_TYPE_LABELS[cancelModalGig.gigType]}`}
+          size="sm"
+          footer={
+            <>
+              <Button
+                variant="ghost" size="sm"
+                onClick={() => { setCancelModalGig(null); setCancelError(null); }}
+                disabled={!!cancellingId}
+              >
+                Dismiss
+              </Button>
+              <Button
+                variant="danger" size="sm"
+                loading={!!cancellingId}
+                onClick={cancelGig}
+              >
+                Confirm Cancel
+              </Button>
+            </>
+          }
+        >
+          <style>{`
+            .cgm-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+            .cgm-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+            .cgm-input {
+              padding: 8px 10px; border-radius: var(--radius-sm);
+              border: 1px solid var(--border); background: var(--bg-elevated);
+              color: var(--text-primary); font-size: 13px; font-family: inherit;
+              transition: border 0.15s; width: 100%; box-sizing: border-box;
+            }
+            .cgm-input:focus { outline: none; border-color: var(--blue); }
+            .cgm-textarea { resize: vertical; min-height: 72px; }
+            .cgm-error { font-size: 12px; color: var(--red); margin-top: 8px; }
+          `}</style>
+
+          <div className="cgm-field">
+            <label className="cgm-label">Cancellation Ticket ID</label>
+            <input
+              className="cgm-input"
+              placeholder="e.g. TKT-00123"
+              value={cancelTicketID}
+              onChange={(e) => setCancelTicketId(e.target.value)}
+              disabled={!!cancellingId}
+            />
+          </div>
+
+          <div className="cgm-field" style={{ marginBottom: 0 }}>
+            <label className="cgm-label">Cancellation Reason</label>
+            <textarea
+              className="cgm-input cgm-textarea"
+              placeholder="Describe why this gig is being cancelled…"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              disabled={!!cancellingId}
+            />
+          </div>
+
+          {cancelError && <div className="cgm-error">{cancelError}</div>}
+        </Modal>
+      )}
     </AdminLayout>
   );
 }
 
 // ─── Stat Card ────────────────────────────────────────────────────────────────
 
-function StatCard({
+const StatCard = memo(function StatCard({
   value,
   label,
   color,
@@ -644,7 +933,7 @@ function StatCard({
       <div className="lg-stat-label">{label}</div>
     </div>
   );
-}
+});
 
 // ─── Gig Expand Panel ─────────────────────────────────────────────────────────
 
@@ -653,56 +942,75 @@ function GigExpandPanel({ gig }: { gig: Gig }) {
   const pending = gig.applications?.filter((a) => a.status === "pending").length ?? 0;
   const rejected = gig.applications?.filter((a) => a.status === "rejected").length ?? 0;
 
+  const typeBadgeClass = `lg-badge--type-${gig.gigType}`;
+  const typeLabel = GIG_TYPE_LABELS[gig.gigType] ?? gig.gigType;
+
+  // Collect type-specific extra fields
+  const extraFields = Object.entries(gig).filter(
+    ([key, val]) =>
+      !BASE_FIELDS.has(key) &&
+      val !== null &&
+      val !== undefined &&
+      val !== "" &&
+      !Array.isArray(val)
+  );
+
   return (
     <div className="lg-expand-inner">
+      {/* Type & category tags */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span className={`lg-badge ${typeBadgeClass}`}>{typeLabel} Gig</span>
+        {gig.category && (
+          <span className="lg-badge lg-badge--category">{gig.category}</span>
+        )}
+      </div>
+
       {/* Description */}
       {gig.description && (
         <div>
           <div className="lg-expand-section-title">Description</div>
-          <div className="lg-expand-desc">{gig.description}</div>
+          <div className="lg-expand-desc">{String(gig.description)}</div>
         </div>
       )}
 
-      {/* Detail grid */}
+      {/* Core details grid */}
       <div>
         <div className="lg-expand-section-title">Details</div>
         <div className="lg-expand-detail-grid">
           {gig.postedBy && (
-            <div className="lg-expand-detail">
-              <span className="lg-expand-detail-label">Posted by</span>
-              <span className="lg-expand-detail-val">{gig.postedBy}</span>
-            </div>
+            <DetailItem label="Posted by" value={String(gig.postedBy)} />
           )}
           {formatLocation(gig.location) && (
-            <div className="lg-expand-detail">
-              <span className="lg-expand-detail-label">Location</span>
-              <span className="lg-expand-detail-val">{formatLocation(gig.location)}</span>
-            </div>
+            <DetailItem label="Location" value={formatLocation(gig.location)!} />
           )}
-          <div className="lg-expand-detail">
-            <span className="lg-expand-detail-label">Posted</span>
-            <span className="lg-expand-detail-val">{formatDate(gig.createdAt)}</span>
-          </div>
-          {gig.salary && (
-            <div className="lg-expand-detail">
-              <span className="lg-expand-detail-label">Salary</span>
-              <span className="lg-expand-detail-val">₱{gig.salary}</span>
-            </div>
+          <DetailItem label="Posted" value={formatDate(gig.createdAt)} />
+          {gig.salary !== undefined && gig.salary !== null && gig.salary !== "" && (
+            <DetailItem label="Salary" value={`₱${gig.salary}`} />
           )}
-          <div className="lg-expand-detail">
-            <span className="lg-expand-detail-label">Vacancies</span>
-            <span className="lg-expand-detail-val">{gig.vacancy ?? "—"}</span>
-          </div>
-          <div className="lg-expand-detail">
-            <span className="lg-expand-detail-label">Slots</span>
-            <span className="lg-expand-detail-val">{gig.slot ?? "—"}</span>
-          </div>
-          {/* <div className="lg-expand-detail">
-            <span className="lg-expand-detail-label">Category</span>
-            <span className="lg-expand-detail-val">{gig.category ?? "—"}</span>
-          </div> */}
+          {gig.vacancy !== undefined && (
+            <DetailItem label="Vacancies" value={String(gig.vacancy ?? "—")} />
+          )}
+          {gig.slot !== undefined && (
+            <DetailItem label="Slots" value={String(gig.slot ?? "—")} />
+          )}
         </div>
       </div>
+
+      {/* Type-specific / additional fields */}
+      {extraFields.length > 0 && (
+        <div>
+          <div className="lg-expand-section-title">Additional Details</div>
+          <div className="lg-expand-detail-grid">
+            {extraFields.map(([key, val]) => (
+              <DetailItem
+                key={key}
+                label={formatFieldLabel(key)}
+                value={formatFieldValue(val)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Applications */}
       <div>
@@ -710,7 +1018,7 @@ function GigExpandPanel({ gig }: { gig: Gig }) {
           <span className="lg-expand-section-title" style={{ margin: 0 }}>
             Applications ({gig.applications?.length ?? 0})
           </span>
-          {gig.applications?.length > 0 && (
+          {(gig.applications?.length ?? 0) > 0 && (
             <div style={{ display: "flex", gap: 6 }}>
               {accepted > 0 && (
                 <span className="lg-badge lg-badge--accepted">{accepted} accepted</span>
@@ -725,7 +1033,7 @@ function GigExpandPanel({ gig }: { gig: Gig }) {
           )}
         </div>
 
-        {gig.applications?.length === 0 ? (
+        {(gig.applications?.length ?? 0) === 0 ? (
           <div style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
             No applications yet.
           </div>
@@ -736,9 +1044,7 @@ function GigExpandPanel({ gig }: { gig: Gig }) {
                 <div>
                   <div className="lg-applicant-name">{app.applicantName}</div>
                   {app.appliedAt && (
-                    <div className="lg-applicant-date">
-                      Applied {formatDate(app.appliedAt)}
-                    </div>
+                    <div className="lg-applicant-date">Applied {formatDate(app.appliedAt)}</div>
                   )}
                 </div>
                 <span
@@ -761,22 +1067,28 @@ function GigExpandPanel({ gig }: { gig: Gig }) {
   );
 }
 
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="lg-expand-detail">
+      <span className="lg-expand-detail-label">{label}</span>
+      <span className="lg-expand-detail-val">{value}</span>
+    </div>
+  );
+}
+
 // ─── Loading Skeleton ─────────────────────────────────────────────────────────
 
-function LoadingSkeleton() {
+const LoadingSkeleton = memo(function LoadingSkeleton() {
   return (
     <div style={{ padding: "12px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
       {[1, 2, 3, 4, 5].map((i) => (
-        <div
-          key={i}
-          style={{ display: "flex", alignItems: "center", gap: 16 }}
-        >
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <div style={{ flex: 2, display: "flex", flexDirection: "column", gap: 5 }}>
             <div className="lg-skeleton" style={{ height: 13, width: "55%" }} />
             <div className="lg-skeleton" style={{ height: 10, width: "35%" }} />
           </div>
+          <div className="lg-skeleton" style={{ height: 20, width: 60, borderRadius: 20 }} />
           <div className="lg-skeleton" style={{ height: 20, width: 70, borderRadius: 20 }} />
-          <div className="lg-skeleton" style={{ height: 20, width: 80, borderRadius: 20 }} />
           <div className="lg-skeleton" style={{ height: 13, width: 30 }} />
           <div className="lg-skeleton" style={{ height: 13, width: 30 }} />
           <div className="lg-skeleton" style={{ height: 13, width: 40 }} />
@@ -785,11 +1097,11 @@ function LoadingSkeleton() {
       ))}
     </div>
   );
-}
+});
 
 // ─── Empty State ──────────────────────────────────────────────────────────────
 
-function EmptyState({ hasFilter }: { hasFilter: boolean }) {
+const EmptyState = memo(function EmptyState({ hasFilter }: { hasFilter: boolean }) {
   return (
     <div className="lg-empty">
       <div className="lg-empty-icon">
@@ -800,9 +1112,9 @@ function EmptyState({ hasFilter }: { hasFilter: boolean }) {
       </div>
       <div className="lg-empty-sub">
         {hasFilter
-          ? "Try adjusting your search or status filter."
+          ? "Try adjusting your search, status, or gig type filter."
           : "Gigs posted on the platform will appear here."}
       </div>
     </div>
   );
-}
+});

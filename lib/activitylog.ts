@@ -19,20 +19,28 @@ export type ContentLogAction =
   | "content_reordered"
   | "content_published"
   | "content_unpublished"
-  | "content_settings_updated";
+  | "content_settings_updated"
+  | "category_added"
+  | "category_updated"
+  | "category_deleted"
+  | "categories_saved";
 
 export type UserLogAction =
   | "user_created"
   | "user_updated"
   | "user_deleted"
   | "user_banned"
-  | "user_unbanned";
+  | "user_unbanned"
+  | "user_suspended"
+  | "user_unsuspended"
+  | "user_skills_updated";
 
 export type GigLogAction =
   | "gig_created"
   | "gig_updated"
   | "gig_deleted"
-  | "gig_closed";
+  | "gig_closed"
+  | "gig_cancelled";
 
 export type QuickGigLogAction = "config_updated";
 
@@ -41,13 +49,16 @@ export type SkillLogAction =
   | "skill_updated"
   | "skill_deleted";
 
+export type SettingsLogAction = "settings_updated";
+
 export type LogAction =
   | AdminLogAction
   | ContentLogAction
   | UserLogAction
   | GigLogAction
   | QuickGigLogAction
-  | SkillLogAction;
+  | SkillLogAction
+  | SettingsLogAction;
 
 export type LogModule =
   | "admin_management"
@@ -148,6 +159,18 @@ export const buildDescription = {
   contentSettingsUpdated: (sectionLabel: string) =>
     `Updated display settings for ${sectionLabel}`,
 
+  categoryAdded: (sectionLabel: string, categoryName: string) =>
+    `Added category "${categoryName}" to ${sectionLabel}`,
+
+  categoryUpdated: (sectionLabel: string, from: string, to: string) =>
+    `Renamed category "${from}" to "${to}" in ${sectionLabel}`,
+
+  categoryDeleted: (sectionLabel: string, categoryName: string) =>
+    `Deleted category "${categoryName}" from ${sectionLabel}`,
+
+  categoriesSaved: (sectionLabel: string) =>
+    `Updated categories list for ${sectionLabel}`,
+
   configUpdated: (section: string) =>
     `Updated Quick Gig configuration — ${section}`,
 
@@ -162,38 +185,35 @@ export const buildDescription = {
   skillDeleted: (skillId: string, skillName: string) =>
     `Deleted skill ${skillId} — "${skillName}"`,
 
-  // // ── User management ───────────────────────────────────────────────────────
+  // ── User management ───────────────────────────────────────────────────────
 
-  // userCreated: (targetName: string) =>
-  //   `Created user account for ${targetName}`,
+  userDeleted: (targetName: string) =>
+    `Permanently deleted user account for ${targetName}`,
 
-  // userUpdated: (targetName: string) =>
-  //   `Updated profile for ${targetName}`,
+  userBanned: (targetName: string) =>
+    `Banned user ${targetName}`,
 
-  // userDeleted: (targetName: string) =>
-  //   `Permanently deleted user account for ${targetName}`,
+  userUnbanned: (targetName: string) =>
+    `Lifted ban on user ${targetName}`,
 
-  // userBanned: (targetName: string, reason?: string) =>
-  //   reason
-  //     ? `Banned ${targetName} — reason: ${reason}`
-  //     : `Banned ${targetName}`,
+  userSuspended: (targetName: string, minutes: number) =>
+    `Suspended user ${targetName} for ${minutes} minutes`,
 
-  // userUnbanned: (targetName: string) =>
-  //   `Lifted ban on ${targetName}`,
+  userUnsuspended: (targetName: string) =>
+    `Lifted suspension on user ${targetName}`,
 
-  // // ── Gig management ────────────────────────────────────────────────────────
+  userSkillsUpdated: (targetName: string) =>
+    `Updated skills for user ${targetName}`,
 
-  // gigCreated: (gigTitle: string) =>
-  //   `Created gig "${gigTitle}"`,
+  // ── Gig management ────────────────────────────────────────────────────────
 
-  // gigUpdated: (gigTitle: string) =>
-  //   `Updated gig "${gigTitle}"`,
+  gigCancelled: (gigTitle: string, gigType: string) =>
+    `Cancelled ${gigType} gig "${gigTitle}"`,
 
-  // gigDeleted: (gigTitle: string) =>
-  //   `Deleted gig "${gigTitle}"`,
+  // ── Settings ──────────────────────────────────────────────────────────────
 
-  // gigClosed: (gigTitle: string) =>
-  //   `Closed gig "${gigTitle}"`,
+  settingsUpdated: (section: string) =>
+    `Updated platform settings — ${section}`,
 };
 
 // ─── writeLog ────────────────────────────────────────────────────────────────

@@ -113,6 +113,9 @@ export const ACTION_CONFIG: Record<string, ActionConfig> = {
   skill_created: { label: "Skill Added",   variant: "indigo" },
   skill_updated: { label: "Skill Updated", variant: "indigo" },
   skill_deleted: { label: "Skill Deleted", variant: "red"    },
+
+  // ── settings  (module variant: gray) ─────────────────────────────────────
+  settings_updated: { label: "Settings Updated", variant: "gray" },
 } satisfies Record<string, ActionConfig>;
 
 // ─── Accessors ────────────────────────────────────────────────────────────────
