@@ -87,6 +87,7 @@ export default function LibraryGSINPage() {
       );
       const list: Skill[] = [];
       snap.forEach((d) => {
+        if (d.id.startsWith("_")) return;
         const data = d.data();
         list.push({
           id:        d.id,
@@ -116,7 +117,7 @@ export default function LibraryGSINPage() {
     return skills.filter(
       (s) =>
         s.name.toLowerCase().includes(q) ||
-        String(s.skillId).includes(q)
+        s.skillId.toLowerCase().includes(q)
     );
   }, [skills, search]);
 

@@ -155,6 +155,7 @@ interface ConfirmProps {
   confirmLabel?: string;
   danger?: boolean;
   loading?: boolean;
+  children?: React.ReactNode;
 }
 
 export function ConfirmDialog({
@@ -166,6 +167,7 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   danger = false,
   loading = false,
+  children,
 }: ConfirmProps) {
   return (
     <Modal
@@ -192,6 +194,7 @@ export function ConfirmDialog({
       <p style={{ fontSize: 14, color: "var(--text-secondary)", lineHeight: 1.6 }}>
         {message}
       </p>
+      {children}
     </Modal>
   );
 }

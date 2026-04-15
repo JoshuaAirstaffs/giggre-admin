@@ -87,6 +87,7 @@ export interface SectionData {
   items: ContentItem[];
   options: SectionOptions;
   lastUpdated: Date | null;
+  categories?: string[];
 }
 
 export interface ActorInfo {
@@ -260,6 +261,7 @@ export function useContent(actor: ActorInfo) {
             items,
             options,
             lastUpdated: rawData?.lastUpdated?.toDate?.() ?? null,
+            categories: Array.isArray(rawData?.categories) ? rawData.categories as string[] : undefined,
           };
         }),
       );
@@ -345,11 +347,17 @@ export function useContent(actor: ActorInfo) {
             if ("imageName" in form) payload.imageName = form.imageName;
             break;
           case "updates":
-          case "help_faq":
-            if ("category" in form) payload.category = form.category;
+            if ("category" in form) payload.category = (form as any).category ?? "";
             if ("title" in form) payload.title = form.title;
             if ("body" in form) payload.body = form.body;
-            if ("sortNumberByCategory" in form) 
+            if ("sortNumberByCategory" in form)
+              payload.sortNumberByCategory = Number((form as any).sortNumberByCategory ?? 0);
+            break;
+          case "help_faq":
+            if ("category" in form) payload.category = (form as any).category;
+            if ("title" in form) payload.title = form.title;
+            if ("body" in form) payload.body = form.body;
+            if ("sortNumberByCategory" in form)
               payload.sortNumberByCategory = Number((form as any).sortNumberByCategory ?? 0);
             break;
           default:
@@ -470,6 +478,42 @@ export function useContent(actor: ActorInfo) {
     [log],
   );
 
+  // ── saveCategories ───────────────────────────────────────────────────────
+  const saveCategories = useCallback(
+    async (
+      sectionKey:         ContentSectionKey,
+      sectionLabel:       string,
+      categories:         string[],
+      previousCategories: string[],
+    ): Promise<{ success: boolean; error?: string }> => {
+      setSubmitting(true);
+      try {
+        await updateDoc(doc(db, "app_content", sectionKey), {
+          categories,
+          lastUpdated: serverTimestamp(),
+        });
+
+        await log({
+          module:        "content_management",
+          action:        "categories_saved",
+          description:   buildDescription.categoriesSaved(sectionLabel),
+          targetSection: sectionKey,
+          targetId:      null,
+          targetName:    sectionLabel,
+          affectedFiles: [sectionPath(sectionKey)],
+          meta:          { from: previousCategories, to: categories },
+        });
+
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message ?? "Failed to save categories." };
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [log],
+  );
+
   const fetchSection = useCallback(async (key: ContentSectionKey): Promise<SectionData> => {
     const sectionRef = doc(db, "app_content", key);
     const sectionSnap = await getDoc(sectionRef);
@@ -509,6 +553,7 @@ export function useContent(actor: ActorInfo) {
       items,
       options: Object.keys(storedOptions).length ? storedOptions : fallback,
       lastUpdated: rawData?.lastUpdated?.toDate?.() ?? null,
+      categories: Array.isArray(rawData?.categories) ? rawData.categories as string[] : undefined,
     };
   }, []);
 
@@ -522,5 +567,6 @@ export function useContent(actor: ActorInfo) {
     updateItem,
     deleteItem,
     saveSettings,
+    saveCategories,
   };
 }

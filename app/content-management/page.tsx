@@ -24,10 +24,9 @@ import {
 import { AboutGiggrePanel } from "@/components/ui/content/AboutGiggrePanel";
 import type { ContentSectionKey } from "@/lib/activitylog";
 import {
-  Plus, Edit2, Trash2, Settings,
+  Plus, Edit2, Trash2, Settings, Tag,
   Image, HelpCircle, Shield, ScrollText, Info, RefreshCw,
-  X, Upload, AlertCircle,
-  ChevronLeft, ChevronRight,
+  X, Upload, AlertCircle, Check, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import type { SectionState } from "@/hooks/usePerSectionData";
 
@@ -53,6 +52,20 @@ const SECTION_KEYS = SECTIONS.map((s) => s.key);
 const ITEM_BASED_SECTIONS = SECTION_KEYS.filter((k) => k !== "about_giggre");
 
 const ITEMS_PER_PAGE = 10;
+
+const PREDEFINED_CATEGORIES: string[] = [
+  "Announcements",
+  "News",
+  "Events or Promos",
+  "Community Messages",
+  "System Updates",
+  "Software Version Updates (Release Notes)",
+  "Maintenance & Downtime Notices",
+  "Security & Privacy Updates",
+  "Marketing & Promotions",
+  "Policy & Legal Updates",
+  "Support & Help Updates",
+];
 
 function getSectionMeta(key: ContentSectionKey) {
   return SECTIONS.find((s) => s.key === key)!;
@@ -255,6 +268,7 @@ function ItemForm({
   loading,
   isEdit,
   takenSortNumbers = [],
+  availableCategories = [],
 }: {
   sectionKey: ContentSectionKey;
   initial: Partial<ContentItem>;
@@ -262,6 +276,7 @@ function ItemForm({
   loading: boolean;
   isEdit?: boolean;
   takenSortNumbers?: number[];
+  availableCategories?: string[];
 }) {
   const [form, setForm] = useState<any>({
     ...emptyItemForSection(sectionKey),
@@ -292,6 +307,8 @@ function ItemForm({
         .if-sort-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
         .if-upload { width: 100%; height: 90px; background: var(--bg-elevated); border: 2px dashed var(--border); border-radius: var(--radius-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--text-muted); font-size: 12px; cursor: pointer; transition: border-color 0.2s; }
         .if-upload:hover { border-color: var(--blue); color: var(--blue); }
+        .if-select { width: 100%; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 12px; color: var(--text-primary); font-size: 13px; outline: none; font-family: inherit; transition: border-color 0.2s; }
+        .if-select:focus { border-color: var(--blue); }
       `}</style>
 
       {sectionKey === "carousel_items" && (
@@ -309,12 +326,31 @@ function ItemForm({
           </div>
         </>
       )}
-      {hasCategories(sectionKey) && (
+
+      {sectionKey === "updates" && (
         <div>
-          <label className="if-label">Category *</label>
-          <input className="if-input" value={form.category ?? ""} onChange={(e) => set("category", e.target.value)} disabled={loading} placeholder="e.g. Feature, General…" />
+          <label className="if-label">Category</label>
+          <select
+            className="if-select"
+            value={(form as any).category ?? ""}
+            onChange={(e) => set("category", e.target.value)}
+            disabled={loading}
+          >
+            <option value="">— Select a category —</option>
+            {availableCategories.map((cat) => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
         </div>
       )}
+
+      {sectionKey === "help_faq" && (
+        <div>
+          <label className="if-label">Category</label>
+          <input className="if-input" value={(form as any).category ?? ""} onChange={(e) => set("category", e.target.value)} disabled={loading} placeholder="e.g. Account, Payments…" />
+        </div>
+      )}
+
       {sectionKey !== "carousel_items" && (
         <div>
           <label className="if-label">Title *</label>
@@ -362,6 +398,164 @@ function ItemForm({
         </Button>
       </div>
     </div>
+  );
+}
+
+// ─── Categories Manager Modal ─────────────────────────────────────────────────
+
+function CategoriesManagerModal({
+  open,
+  onClose,
+  currentCategories,
+  onSave,
+  loading,
+}: {
+  open: boolean;
+  onClose: () => void;
+  currentCategories: string[];
+  onSave: (categories: string[]) => void;
+  loading: boolean;
+}) {
+  const [categories, setCategories] = useState<string[]>([]);
+  const [newInput, setNewInput] = useState("");
+  const [editIndex, setEditIndex] = useState<number | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [error, setError] = useState("");
+
+  // Sync working copy when modal opens
+  useEffect(() => {
+    if (open) {
+      setCategories([...currentCategories]);
+      setNewInput("");
+      setEditIndex(null);
+      setEditValue("");
+      setError("");
+    }
+  }, [open, currentCategories]);
+
+  const handleAdd = () => {
+    const trimmed = newInput.trim();
+    if (!trimmed) { setError("Category name cannot be empty."); return; }
+    if (categories.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
+      setError("This category already exists.");
+      return;
+    }
+    setCategories((prev) => [...prev, trimmed]);
+    setNewInput("");
+    setError("");
+  };
+
+  const handleDelete = (idx: number) => {
+    if (editIndex === idx) { setEditIndex(null); setEditValue(""); }
+    setCategories((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleStartEdit = (idx: number) => {
+    setEditIndex(idx);
+    setEditValue(categories[idx]);
+    setError("");
+  };
+
+  const handleSaveEdit = () => {
+    if (editIndex === null) return;
+    const trimmed = editValue.trim();
+    if (!trimmed) { setError("Category name cannot be empty."); return; }
+    if (categories.some((c, i) => i !== editIndex && c.toLowerCase() === trimmed.toLowerCase())) {
+      setError("This category already exists.");
+      return;
+    }
+    setCategories((prev) => prev.map((c, i) => (i === editIndex ? trimmed : c)));
+    setEditIndex(null);
+    setEditValue("");
+    setError("");
+  };
+
+  const handleCancelEdit = () => {
+    setEditIndex(null);
+    setEditValue("");
+    setError("");
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Manage Categories — Updates" size="md" description="Define the list of categories available when creating or editing update items.">
+      <style>{`
+        .cm-cat-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; margin-bottom: 16px; }
+        .cm-cat-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+        .cm-cat-row-name { flex: 1; font-size: 13px; color: var(--text-primary); }
+        .cm-cat-edit-input { flex: 1; background: var(--bg-surface); border: 1px solid var(--blue); border-radius: 4px; padding: 4px 8px; color: var(--text-primary); font-size: 13px; outline: none; font-family: inherit; }
+        .cm-cat-add-row { display: flex; gap: 8px; align-items: center; }
+        .cm-cat-add-input { flex: 1; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; color: var(--text-primary); font-size: 13px; outline: none; font-family: inherit; transition: border-color 0.2s; }
+        .cm-cat-add-input:focus { border-color: var(--blue); }
+        .cm-cat-error { font-size: 11px; color: var(--red); margin-top: 4px; }
+        .cm-cat-empty { font-size: 12px; color: var(--text-muted); padding: 16px; text-align: center; }
+        .cm-cat-icon-btn { width: 26px; height: 26px; border-radius: 5px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
+        .cm-cat-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .cm-cat-icon-btn.danger:hover { background: var(--red-dim); color: var(--red); border-color: rgba(239,68,68,0.25); }
+        .cm-cat-icon-btn.confirm { background: var(--blue); border-color: var(--blue); color: #fff; }
+        .cm-cat-icon-btn.confirm:hover { opacity: 0.85; }
+      `}</style>
+
+      <div className="cm-cat-list">
+        {categories.length === 0 ? (
+          <div className="cm-cat-empty">No categories yet. Add one below.</div>
+        ) : (
+          categories.map((cat, idx) => (
+            <div key={idx} className="cm-cat-row">
+              {editIndex === idx ? (
+                <>
+                  <input
+                    className="cm-cat-edit-input"
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleSaveEdit(); if (e.key === "Escape") handleCancelEdit(); }}
+                    autoFocus
+                    disabled={loading}
+                  />
+                  <button className="cm-cat-icon-btn confirm" title="Save" onClick={handleSaveEdit} disabled={loading}>
+                    <Check size={11} />
+                  </button>
+                  <button className="cm-cat-icon-btn" title="Cancel" onClick={handleCancelEdit} disabled={loading}>
+                    <X size={11} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="cm-cat-row-name">{cat}</span>
+                  <button className="cm-cat-icon-btn" title="Edit" onClick={() => handleStartEdit(idx)} disabled={loading}>
+                    <Edit2 size={11} />
+                  </button>
+                  <button className="cm-cat-icon-btn danger" title="Delete" onClick={() => handleDelete(idx)} disabled={loading}>
+                    <Trash2 size={11} />
+                  </button>
+                </>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="cm-cat-add-row">
+        <input
+          className="cm-cat-add-input"
+          placeholder="New category name…"
+          value={newInput}
+          onChange={(e) => { setNewInput(e.target.value); setError(""); }}
+          onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+          disabled={loading}
+        />
+        <Button variant="secondary" size="sm" icon={Plus} onClick={handleAdd} disabled={loading || !newInput.trim()}>
+          Add
+        </Button>
+      </div>
+      {error && <div className="cm-cat-error">{error}</div>}
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, paddingTop: 16, borderTop: "1px solid var(--border)", marginTop: 16 }}>
+        <Button variant="secondary" size="sm" onClick={onClose} disabled={loading}>Cancel</Button>
+        <Button variant="primary" size="sm" loading={loading} onClick={() => onSave(categories)}>
+          Save Categories
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -436,14 +630,21 @@ function SectionPanel({
   content: ReturnType<typeof useContent>;
 }) {
   const meta = getSectionMeta(sectionKey);
-  const { submitting, createItem, updateItem, deleteItem, saveSettings } = content;
+  const { submitting, createItem, updateItem, deleteItem, saveSettings, saveCategories } = content;
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ContentItem | null>(null);
   const [deleting, setDeleting] = useState<ContentItem | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [catMgrOpen, setCatMgrOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+
+  // For the updates section: use stored categories, falling back to predefined list
+  const availableCategories: string[] =
+    sectionKey === "updates"
+      ? (sectionState.data?.categories ?? PREDEFINED_CATEGORIES)
+      : [];
 
   const takenSortNumbers =
     sectionKey === "carousel_items" && sectionState.data
@@ -547,6 +748,18 @@ function SectionPanel({
     }
   };
 
+  const handleSaveCategories = async (categories: string[]) => {
+    const previous = data.categories ?? PREDEFINED_CATEGORIES;
+    const result = await saveCategories(sectionKey, meta.label, categories, previous);
+    if (result.success) {
+      toast.success("Categories saved");
+      setCatMgrOpen(false);
+      onRefresh();
+    } else {
+      toast.error("Failed to save categories", result.error);
+    }
+  };
+
   return (
     <div>
       <style>{`
@@ -629,6 +842,11 @@ function SectionPanel({
         >
           <RefreshCw size={13} className={sectionState.loading ? "spin-anim" : ""} />
         </button>
+        {sectionKey === "updates" && (
+          <button className="cm-icon-btn" title="Manage categories" onClick={() => setCatMgrOpen(true)}>
+            <Tag size={13} />
+          </button>
+        )}
         {sectionKey !== "carousel_items" && (
           <button className="cm-icon-btn" title="Section settings" onClick={() => setSettingsOpen(true)}>
             <Settings size={13} />
@@ -711,12 +929,12 @@ function SectionPanel({
 
       {/* Modals */}
       <Modal open={creating} onClose={() => setCreating(false)} title={`Add Item — ${meta.label}`} size="md">
-        <ItemForm sectionKey={sectionKey} initial={emptyItemForSection(sectionKey)} onSubmit={handleCreate} loading={submitting} takenSortNumbers={takenSortNumbers} />
+        <ItemForm sectionKey={sectionKey} initial={emptyItemForSection(sectionKey)} onSubmit={handleCreate} loading={submitting} takenSortNumbers={takenSortNumbers} availableCategories={availableCategories} />
       </Modal>
 
       <Modal open={!!editing} onClose={() => setEditing(null)} title={`Edit Item — ${meta.label}`} size="md">
         {editing && (
-          <ItemForm sectionKey={sectionKey} initial={editing} onSubmit={handleEdit} loading={submitting} isEdit takenSortNumbers={takenSortNumbers} />
+          <ItemForm sectionKey={sectionKey} initial={editing} onSubmit={handleEdit} loading={submitting} isEdit takenSortNumbers={takenSortNumbers} availableCategories={availableCategories} />
         )}
       </Modal>
 
@@ -745,6 +963,16 @@ function SectionPanel({
           loading={submitting}
         />
       </Modal>
+
+      {sectionKey === "updates" && (
+        <CategoriesManagerModal
+          open={catMgrOpen}
+          onClose={() => setCatMgrOpen(false)}
+          currentCategories={availableCategories}
+          onSave={handleSaveCategories}
+          loading={submitting}
+        />
+      )}
     </div>
   );
 }
