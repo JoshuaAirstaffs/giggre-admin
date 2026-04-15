@@ -33,7 +33,8 @@ export type UserLogAction =
   | "user_unbanned"
   | "user_suspended"
   | "user_unsuspended"
-  | "user_skills_updated";
+  | "user_skills_updated"
+  | "user_host_reward_skills_updated";
 
 export type GigLogAction =
   | "gig_created"
