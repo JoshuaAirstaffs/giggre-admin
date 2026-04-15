@@ -11,6 +11,9 @@ import {
   doc,
   onSnapshot,
   collection,
+  getDocs,
+  query,
+  where,
   updateDoc,
   serverTimestamp,
   Timestamp,
@@ -20,7 +23,7 @@ import { db } from "@/lib/firebase";
 import { writeLog, buildDescription } from "@/lib/activitylog";
 import {
   ArrowLeft, User, MapPin, Star, Briefcase,
-  Clock, Shield, Wrench, Plus, Trash2, ChevronLeft,
+  Clock, Shield, Wrench, Plus, Trash2, ChevronLeft, CheckCircle,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -59,11 +62,36 @@ interface UserDoc {
   skills: string[];
   // Skills XP object
   skillsXP: Record<string, number>;
+  // Host-eligible reward skills
+  hostRewardSkills: string[];
 }
 
 interface SkillEntry {
   id: string;
   name: string;
+}
+
+type WorkedGigType = "offered" | "open" | "quick";
+const WORKED_GIG_COLLECTIONS: Record<WorkedGigType, string> = {
+  offered: "offered_gigs",
+  open: "open_gigs",
+  quick: "quick_gigs",
+};
+const WORKED_GIG_LABELS: Record<WorkedGigType, string> = {
+  offered: "Offered",
+  open: "Open",
+  quick: "Quick",
+};
+
+interface WorkedGig {
+  id: string;
+  gigType: WorkedGigType;
+  title: string;
+  status: string;
+  salary?: string | number;
+  category?: string;
+  createdAt: Timestamp | null;
+  hostId?: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -126,6 +154,7 @@ function toUserDoc(id: string, d: Record<string, any>): UserDoc {
     isBanned:          d.isBanned          ?? false,
     skills:            Array.isArray(d.skills)   ? d.skills   : [],
     skillsXP:          d.skillsXP && typeof d.skillsXP === "object" ? d.skillsXP : {},
+    hostRewardSkills:  Array.isArray(d.hostRewardSkills) ? d.hostRewardSkills : [],
   };
 }
 
@@ -174,6 +203,7 @@ function SkillsModal({ open, onClose, user, availableSkills, onSave, saving }: S
   const [skillSearch, setSkillSearch] = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [error, setError] = useState("");
+  const [checkedSkills, setCheckedSkills] = useState<Set<string>>(new Set());
 
   // Reset when opening
   useEffect(() => {
@@ -184,6 +214,7 @@ function SkillsModal({ open, onClose, user, availableSkills, onSave, saving }: S
       setSkillSearch("");
       setDropdownOpen(false);
       setError("");
+      setCheckedSkills(new Set());
     }
   }, [open, user.skillsXP]);
 
@@ -217,6 +248,24 @@ function SkillsModal({ open, onClose, user, availableSkills, onSave, saving }: S
       delete next[skillName];
       return next;
     });
+    setCheckedSkills((prev) => { const next = new Set(prev); next.delete(skillName); return next; });
+  };
+
+  const handleBulkRemove = () => {
+    setSkillsXP((prev) => {
+      const next = { ...prev };
+      checkedSkills.forEach((k) => delete next[k]);
+      return next;
+    });
+    setCheckedSkills(new Set());
+  };
+
+  const toggleCheck = (skillName: string) => {
+    setCheckedSkills((prev) => {
+      const next = new Set(prev);
+      next.has(skillName) ? next.delete(skillName) : next.add(skillName);
+      return next;
+    });
   };
 
   const handleLevelChange = (skillName: string, level: number) => {
@@ -225,6 +274,8 @@ function SkillsModal({ open, onClose, user, availableSkills, onSave, saving }: S
   };
 
   const entries = Object.entries(skillsXP);
+  const allChecked = entries.length > 0 && checkedSkills.size === entries.length;
+  const toggleAll = () => setCheckedSkills(allChecked ? new Set() : new Set(entries.map(([k]) => k)));
 
   return (
     <Modal
@@ -243,11 +294,17 @@ function SkillsModal({ open, onClose, user, availableSkills, onSave, saving }: S
       <style>{`
         .sm-skill-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border-muted); }
         .sm-skill-row:last-child { border-bottom: none; }
+        .sm-skill-row.checked { background: color-mix(in srgb, var(--red) 6%, transparent); border-radius: 6px; }
         .sm-skill-name { flex: 1; font-size: 13px; color: var(--text-primary); font-weight: 500; }
         .sm-level-input { width: 56px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 13px; font-family: inherit; text-align: center; }
         .sm-level-input:focus { outline: none; border-color: var(--blue); }
         .sm-remove-btn { width: 26px; height: 26px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-muted); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
         .sm-remove-btn:hover { background: var(--red-dim); color: var(--red); border-color: rgba(239,68,68,0.3); }
+        .sm-bulk-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--red-dim); border: 1px solid rgba(239,68,68,0.25); border-radius: 6px; margin-bottom: 10px; }
+        .sm-bulk-label { flex: 1; font-size: 12px; color: var(--red); font-weight: 600; }
+        .sm-bulk-del { display: flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(239,68,68,0.4); background: none; color: var(--red); font-size: 12px; font-family: inherit; cursor: pointer; transition: all 0.15s; font-weight: 600; }
+        .sm-bulk-del:hover { background: var(--red); color: #fff; }
+        .sm-check { width: 15px; height: 15px; accent-color: var(--red); cursor: pointer; flex-shrink: 0; }
         .sm-add-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: flex-start; }
         .sm-search-wrap { position: relative; flex: 1; min-width: 140px; }
         .sm-search-input { width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 13px; font-family: inherit; box-sizing: border-box; }
@@ -322,15 +379,32 @@ function SkillsModal({ open, onClose, user, availableSkills, onSave, saving }: S
       </div>
 
       {/* Assigned skills */}
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 8 }}>
-        Assigned Skills ({entries.length})
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", color: "var(--text-muted)", flex: 1 }}>
+          Assigned Skills ({entries.length})
+        </span>
+        {entries.length > 0 && (
+          <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-muted)", cursor: "pointer", userSelect: "none" }}>
+            <input type="checkbox" className="sm-check" checked={allChecked} onChange={toggleAll} />
+            Select all
+          </label>
+        )}
       </div>
+      {checkedSkills.size > 0 && (
+        <div className="sm-bulk-bar">
+          <span className="sm-bulk-label">{checkedSkills.size} skill{checkedSkills.size !== 1 ? "s" : ""} selected</span>
+          <button className="sm-bulk-del" onClick={handleBulkRemove}>
+            <Trash2 size={12} /> Delete selected
+          </button>
+        </div>
+      )}
       {entries.length === 0 ? (
         <div className="sm-empty">No skills assigned yet.</div>
       ) : (
         <div>
           {entries.map(([skillName, level]) => (
-            <div key={skillName} className="sm-skill-row">
+            <div key={skillName} className={`sm-skill-row${checkedSkills.has(skillName) ? " checked" : ""}`}>
+              <input type="checkbox" className="sm-check" checked={checkedSkills.has(skillName)} onChange={() => toggleCheck(skillName)} />
               <span className="sm-skill-name">{skillName}</span>
               <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Level</span>
               <input
@@ -342,6 +416,199 @@ function SkillsModal({ open, onClose, user, availableSkills, onSave, saving }: S
                 onChange={(e) => handleLevelChange(skillName, Number(e.target.value))}
               />
               <button className="sm-remove-btn" title="Remove skill" onClick={() => handleRemove(skillName)}>
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── Host Reward Skills Modal ─────────────────────────────────────────────────
+
+interface HostRewardSkillsModalProps {
+  open: boolean;
+  onClose: () => void;
+  user: UserDoc;
+  availableSkills: SkillEntry[];
+  onSave: (newSkills: string[]) => Promise<void>;
+  saving: boolean;
+}
+
+function HostRewardSkillsModal({ open, onClose, user, availableSkills, onSave, saving }: HostRewardSkillsModalProps) {
+  const [skills, setSkills] = useState<string[]>([]);
+  const [selectedSkill, setSelectedSkill] = useState("");
+  const [skillSearch, setSkillSearch] = useState("");
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [error, setError] = useState("");
+  const [checkedSkills, setCheckedSkills] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (open) {
+      setSkills([...user.hostRewardSkills]);
+      setSelectedSkill("");
+      setSkillSearch("");
+      setDropdownOpen(false);
+      setError("");
+      setCheckedSkills(new Set());
+    }
+  }, [open, user.hostRewardSkills]);
+
+  const unassigned = availableSkills.filter((s) => !skills.includes(s.name));
+  const filtered = skillSearch.trim()
+    ? unassigned.filter((s) => s.name.toLowerCase().includes(skillSearch.trim().toLowerCase()))
+    : unassigned;
+
+  const handleAdd = () => {
+    if (!selectedSkill) { setError("Select a skill."); return; }
+    if (skills.includes(selectedSkill)) { setError("Skill already added."); return; }
+    setSkills((prev) => [...prev, selectedSkill]);
+    setSelectedSkill("");
+    setSkillSearch("");
+    setDropdownOpen(false);
+    setError("");
+  };
+
+  const handleSelect = (skillName: string) => {
+    setSelectedSkill(skillName);
+    setSkillSearch(skillName);
+    setDropdownOpen(false);
+    setError("");
+  };
+
+  const handleRemove = (skillName: string) => {
+    setSkills((prev) => prev.filter((s) => s !== skillName));
+    setCheckedSkills((prev) => { const next = new Set(prev); next.delete(skillName); return next; });
+  };
+
+  const handleBulkRemove = () => {
+    setSkills((prev) => prev.filter((s) => !checkedSkills.has(s)));
+    setCheckedSkills(new Set());
+  };
+
+  const toggleCheck = (skillName: string) => {
+    setCheckedSkills((prev) => {
+      const next = new Set(prev);
+      next.has(skillName) ? next.delete(skillName) : next.add(skillName);
+      return next;
+    });
+  };
+
+  const allChecked = skills.length > 0 && checkedSkills.size === skills.length;
+  const toggleAll = () => setCheckedSkills(allChecked ? new Set() : new Set(skills));
+
+  return (
+    <Modal
+      open={open}
+      onClose={saving ? () => {} : onClose}
+      title="Host-Eligible Reward Skills"
+      description={`Manage host-eligible reward skills for ${user.name}`}
+      size="md"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button variant="primary" size="sm" loading={saving} onClick={() => onSave(skills)}>Save Skills</Button>
+        </>
+      }
+    >
+      <style>{`
+        .hrs-skill-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border-muted); }
+        .hrs-skill-row:last-child { border-bottom: none; }
+        .hrs-skill-row.checked { background: color-mix(in srgb, var(--red) 6%, transparent); border-radius: 6px; }
+        .hrs-skill-name { flex: 1; font-size: 13px; color: var(--text-primary); font-weight: 500; }
+        .hrs-remove-btn { width: 26px; height: 26px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-muted); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
+        .hrs-remove-btn:hover { background: var(--red-dim); color: var(--red); border-color: rgba(239,68,68,0.3); }
+        .hrs-bulk-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--red-dim); border: 1px solid rgba(239,68,68,0.25); border-radius: 6px; margin-bottom: 10px; }
+        .hrs-bulk-label { flex: 1; font-size: 12px; color: var(--red); font-weight: 600; }
+        .hrs-bulk-del { display: flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(239,68,68,0.4); background: none; color: var(--red); font-size: 12px; font-family: inherit; cursor: pointer; transition: all 0.15s; font-weight: 600; }
+        .hrs-bulk-del:hover { background: var(--red); color: #fff; }
+        .hrs-check { width: 15px; height: 15px; accent-color: var(--red); cursor: pointer; flex-shrink: 0; }
+        .hrs-add-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: flex-start; }
+        .hrs-search-wrap { position: relative; flex: 1; min-width: 160px; }
+        .hrs-search-input { width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 13px; font-family: inherit; box-sizing: border-box; }
+        .hrs-search-input:focus { outline: none; border-color: var(--blue); }
+        .hrs-search-input.selected { border-color: var(--blue); background: var(--blue-dim); }
+        .hrs-dropdown { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); z-index: 100; max-height: 200px; overflow-y: auto; }
+        .hrs-dropdown-item { padding: 8px 12px; font-size: 13px; color: var(--text-primary); cursor: pointer; transition: background 0.1s; }
+        .hrs-dropdown-item:hover { background: var(--bg-elevated); }
+        .hrs-dropdown-empty { padding: 10px 12px; font-size: 12px; color: var(--text-muted); font-style: italic; }
+        .hrs-error { font-size: 12px; color: var(--red); margin-top: -8px; margin-bottom: 8px; }
+        .hrs-empty { font-size: 13px; color: var(--text-muted); font-style: italic; padding: 12px 0; }
+      `}</style>
+
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 8 }}>
+          Add Skill
+        </div>
+        <div className="hrs-add-row">
+          <div className="hrs-search-wrap">
+            <input
+              type="text"
+              className={`hrs-search-input${selectedSkill ? " selected" : ""}`}
+              placeholder="Search skills…"
+              value={skillSearch}
+              onChange={(e) => {
+                setSkillSearch(e.target.value);
+                setSelectedSkill("");
+                setDropdownOpen(true);
+                setError("");
+              }}
+              onFocus={() => setDropdownOpen(true)}
+              onBlur={() => setTimeout(() => setDropdownOpen(false), 150)}
+            />
+            {dropdownOpen && (
+              <div className="hrs-dropdown">
+                {filtered.length === 0 ? (
+                  <div className="hrs-dropdown-empty">
+                    {skillSearch.trim() ? `No skills match "${skillSearch}"` : "All skills assigned"}
+                  </div>
+                ) : (
+                  filtered.map((s) => (
+                    <div key={s.id} className="hrs-dropdown-item" onMouseDown={() => handleSelect(s.name)}>
+                      {s.name}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+          <Button variant="primary" size="sm" icon={Plus} onClick={handleAdd} disabled={!selectedSkill}>
+            Add
+          </Button>
+        </div>
+        {error && <div className="hrs-error">{error}</div>}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", color: "var(--text-muted)", flex: 1 }}>
+          Assigned Skills ({skills.length})
+        </span>
+        {skills.length > 0 && (
+          <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-muted)", cursor: "pointer", userSelect: "none" }}>
+            <input type="checkbox" className="hrs-check" checked={allChecked} onChange={toggleAll} />
+            Select all
+          </label>
+        )}
+      </div>
+      {checkedSkills.size > 0 && (
+        <div className="hrs-bulk-bar">
+          <span className="hrs-bulk-label">{checkedSkills.size} skill{checkedSkills.size !== 1 ? "s" : ""} selected</span>
+          <button className="hrs-bulk-del" onClick={handleBulkRemove}>
+            <Trash2 size={12} /> Delete selected
+          </button>
+        </div>
+      )}
+      {skills.length === 0 ? (
+        <div className="hrs-empty">No reward skills assigned yet.</div>
+      ) : (
+        <div>
+          {skills.map((skillName) => (
+            <div key={skillName} className={`hrs-skill-row${checkedSkills.has(skillName) ? " checked" : ""}`}>
+              <input type="checkbox" className="hrs-check" checked={checkedSkills.has(skillName)} onChange={() => toggleCheck(skillName)} />
+              <span className="hrs-skill-name">{skillName}</span>
+              <button className="hrs-remove-btn" title="Remove skill" onClick={() => handleRemove(skillName)}>
                 <Trash2 size={12} />
               </button>
             </div>
@@ -365,6 +632,12 @@ export default function UserProfilePage() {
   const [availableSkills, setAvailableSkills] = useState<SkillEntry[]>([]);
   const [skillsModalOpen, setSkillsModalOpen] = useState(false);
   const [savingSkills, setSavingSkills]  = useState(false);
+  const [hostRewardSkillsModalOpen, setHostRewardSkillsModalOpen] = useState(false);
+  const [savingHostRewardSkills, setSavingHostRewardSkills] = useState(false);
+  const [postedGigs, setPostedGigs]      = useState<WorkedGig[]>([]);
+  const [postedGigsLoading, setPostedGigsLoading] = useState(false);
+  const [workedGigs, setWorkedGigs]      = useState<WorkedGig[]>([]);
+  const [workedGigsLoading, setWorkedGigsLoading] = useState(false);
 
   // ── Real-time user listener ───────────────────────────────────────────────
   useEffect(() => {
@@ -386,6 +659,78 @@ export default function UserProfilePage() {
       }
     );
     return () => unsub();
+  }, [userId]);
+
+  // ── Fetch gigs posted by the user (hostId) ───────────────────────────────
+  useEffect(() => {
+    if (!userId) return;
+    setPostedGigsLoading(true);
+    const types: WorkedGigType[] = ["offered", "open", "quick"];
+    Promise.all(
+      types.map((t) =>
+        getDocs(query(collection(db, WORKED_GIG_COLLECTIONS[t]), where("hostId", "==", userId)))
+      )
+    ).then((snaps) => {
+      const gigs: WorkedGig[] = snaps.flatMap((snap, i) =>
+        snap.docs.map((d) => {
+          const data = d.data() as Record<string, any>;
+          return {
+            id: d.id,
+            gigType: types[i],
+            title: data.title ?? "Untitled",
+            status: data.status ?? "unknown",
+            salary: data.salary,
+            category: data.category,
+            createdAt: data.createdAt instanceof Timestamp ? data.createdAt : null,
+            hostId: data.hostId,
+          } satisfies WorkedGig;
+        })
+      );
+      gigs.sort((a, b) => (b.createdAt?.toMillis() ?? 0) - (a.createdAt?.toMillis() ?? 0));
+      setPostedGigs(gigs);
+    }).catch((err) => {
+      console.error("[UserProfile] fetchPostedGigs error:", err);
+    }).finally(() => {
+      setPostedGigsLoading(false);
+    });
+  }, [userId]);
+
+  // ── Fetch gigs where user was the worker ─────────────────────────────────
+  useEffect(() => {
+    if (!userId) return;
+    setWorkedGigsLoading(true);
+    const types: WorkedGigType[] = ["offered", "open", "quick"];
+    Promise.all(
+      types.map((t) =>
+        getDocs(query(collection(db, WORKED_GIG_COLLECTIONS[t]), where("workerId", "==", userId)))
+      )
+    ).then((snaps) => {
+      const gigs: WorkedGig[] = snaps.flatMap((snap, i) =>
+        snap.docs.map((d) => {
+          const data = d.data() as Record<string, any>;
+          return {
+            id: d.id,
+            gigType: types[i],
+            title: data.title ?? "Untitled",
+            status: data.status ?? "unknown",
+            salary: data.salary,
+            category: data.category,
+            createdAt: data.createdAt instanceof Timestamp ? data.createdAt : null,
+            hostId: data.hostId,
+          } satisfies WorkedGig;
+        })
+      );
+      gigs.sort((a, b) => {
+        const ta = a.createdAt?.toMillis() ?? 0;
+        const tb = b.createdAt?.toMillis() ?? 0;
+        return tb - ta;
+      });
+      setWorkedGigs(gigs);
+    }).catch((err) => {
+      console.error("[UserProfile] fetchWorkedGigs error:", err);
+    }).finally(() => {
+      setWorkedGigsLoading(false);
+    });
   }, [userId]);
 
   // ── Real-time skills collection listener ─────────────────────────────────
@@ -430,6 +775,37 @@ export default function UserProfilePage() {
       console.error("[UserProfile] save skills error:", err);
     } finally {
       setSavingSkills(false);
+    }
+  }, [userData, adminUser]);
+
+  // ── Save host reward skills ───────────────────────────────────────────────
+  const handleSaveHostRewardSkills = useCallback(async (newSkills: string[]) => {
+    if (!userData || !adminUser) return;
+    setSavingHostRewardSkills(true);
+    const added   = newSkills.filter((s) => !userData.hostRewardSkills.includes(s));
+    const removed = userData.hostRewardSkills.filter((s) => !newSkills.includes(s));
+    try {
+      await updateDoc(doc(db, "users", userData.id), {
+        hostRewardSkills: newSkills,
+        updatedAt: serverTimestamp(),
+      });
+      await writeLog({
+        actorId: adminUser.uid,
+        actorName: adminUser.displayName ?? "Unknown",
+        actorEmail: adminUser.email ?? "",
+        module: "user_management",
+        action: "user_host_reward_skills_updated",
+        description: buildDescription.userSkillsUpdated(userData.name),
+        targetId: userData.id,
+        targetName: userData.name,
+        affectedFiles: [`users/${userData.id}`],
+        meta: { from: userData.hostRewardSkills, to: newSkills, other: { added, removed } },
+      });
+      setHostRewardSkillsModalOpen(false);
+    } catch (err) {
+      console.error("[UserProfile] save host reward skills error:", err);
+    } finally {
+      setSavingHostRewardSkills(false);
     }
   }, [userData, adminUser]);
 
@@ -595,6 +971,39 @@ export default function UserProfilePage() {
           )}
         </SectionCard>
 
+        {/* Host-Eligible Reward Skills */}
+        <SectionCard title="Host-Eligible Reward Skills" icon={Star}>
+          {userData.hostRewardSkills.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>
+              No reward skills assigned.{" "}
+              <button
+                style={{ background: "none", border: "none", color: "var(--blue)", cursor: "pointer", fontSize: 13, padding: 0 }}
+                onClick={() => setHostRewardSkillsModalOpen(true)}
+              >
+                Add skills →
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 4 }}>
+              {userData.hostRewardSkills.map((skillName) => (
+                <div
+                  key={skillName}
+                  style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 20, padding: "4px 12px", fontSize: 12 }}
+                >
+                  <span style={{ color: "var(--text-primary)", fontWeight: 500 }}>{skillName}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {userData.hostRewardSkills.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <Button variant="secondary" size="sm" icon={Wrench} onClick={() => setHostRewardSkillsModalOpen(true)}>
+                Edit Reward Skills
+              </Button>
+            </div>
+          )}
+        </SectionCard>
+
         {/* Legacy skills array */}
         {userData.skills.length > 0 && (
           <SectionCard title="Legacy Skills" icon={Wrench}>
@@ -612,6 +1021,136 @@ export default function UserProfilePage() {
         )}
       </div>
 
+      {/* Gigs Posted */}
+      <div style={{ marginTop: 16 }}>
+        <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "20px 24px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+            <Briefcase size={15} style={{ color: "var(--blue)" }} />
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
+              Gigs Posted ({postedGigsLoading ? "…" : postedGigs.length})
+            </span>
+          </div>
+          {postedGigsLoading ? (
+            <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>Loading gigs…</div>
+          ) : postedGigs.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>
+              No gigs posted yet.
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                    {["Title", "Type", "Category", "Status", "Pay", "Date"].map((h) => (
+                      <th key={h} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {postedGigs.map((gig) => (
+                    <tr key={`${gig.gigType}-${gig.id}`} style={{ borderBottom: "1px solid var(--border-muted)" }}>
+                      <td style={{ padding: "9px 10px", color: "var(--text-primary)", fontWeight: 500, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {gig.title}
+                      </td>
+                      <td style={{ padding: "9px 10px" }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, background: "var(--blue-dim)", color: "var(--blue)", borderRadius: 20, padding: "2px 8px" }}>
+                          {WORKED_GIG_LABELS[gig.gigType]}
+                        </span>
+                      </td>
+                      <td style={{ padding: "9px 10px", color: "var(--text-muted)" }}>
+                        {gig.category ?? "—"}
+                      </td>
+                      <td style={{ padding: "9px 10px" }}>
+                        <span style={{
+                          fontSize: 11, fontWeight: 600, borderRadius: 20, padding: "2px 8px",
+                          background: gig.status === "completed" ? "var(--green-dim)" : gig.status === "cancelled" ? "var(--red-dim)" : "var(--bg-elevated)",
+                          color: gig.status === "completed" ? "var(--green)" : gig.status === "cancelled" ? "var(--red)" : "var(--text-muted)",
+                        }}>
+                          {gig.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: "9px 10px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+                        {gig.salary != null ? `₱${gig.salary}` : "—"}
+                      </td>
+                      <td style={{ padding: "9px 10px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                        {gig.createdAt ? gig.createdAt.toDate().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Gigs Worked */}
+      <div style={{ marginTop: 16 }}>
+        <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "20px 24px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+            <CheckCircle size={15} style={{ color: "var(--blue)" }} />
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
+              Gigs Worked ({workedGigsLoading ? "…" : workedGigs.length})
+            </span>
+          </div>
+          {workedGigsLoading ? (
+            <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>Loading gigs…</div>
+          ) : workedGigs.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>
+              No gigs worked yet.
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                    {["Title", "Type", "Category", "Status", "Pay", "Date"].map((h) => (
+                      <th key={h} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {workedGigs.map((gig) => (
+                    <tr key={`${gig.gigType}-${gig.id}`} style={{ borderBottom: "1px solid var(--border-muted)" }}>
+                      <td style={{ padding: "9px 10px", color: "var(--text-primary)", fontWeight: 500, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {gig.title}
+                      </td>
+                      <td style={{ padding: "9px 10px" }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, background: "var(--blue-dim)", color: "var(--blue)", borderRadius: 20, padding: "2px 8px" }}>
+                          {WORKED_GIG_LABELS[gig.gigType]}
+                        </span>
+                      </td>
+                      <td style={{ padding: "9px 10px", color: "var(--text-muted)" }}>
+                        {gig.category ?? "—"}
+                      </td>
+                      <td style={{ padding: "9px 10px" }}>
+                        <span style={{
+                          fontSize: 11, fontWeight: 600, borderRadius: 20, padding: "2px 8px",
+                          background: gig.status === "completed" ? "var(--green-dim)" : gig.status === "cancelled" ? "var(--red-dim)" : "var(--bg-elevated)",
+                          color: gig.status === "completed" ? "var(--green)" : gig.status === "cancelled" ? "var(--red)" : "var(--text-muted)",
+                        }}>
+                          {gig.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: "9px 10px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+                        {gig.salary != null ? `$${gig.salary}` : "—"}
+                      </td>
+                      <td style={{ padding: "9px 10px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                        {gig.createdAt ? gig.createdAt.toDate().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Skills Modal */}
       {userData && (
         <SkillsModal
@@ -621,6 +1160,18 @@ export default function UserProfilePage() {
           availableSkills={availableSkills}
           onSave={handleSaveSkills}
           saving={savingSkills}
+        />
+      )}
+
+      {/* Host Reward Skills Modal */}
+      {userData && (
+        <HostRewardSkillsModal
+          open={hostRewardSkillsModalOpen}
+          onClose={() => setHostRewardSkillsModalOpen(false)}
+          user={userData}
+          availableSkills={availableSkills}
+          onSave={handleSaveHostRewardSkills}
+          saving={savingHostRewardSkills}
         />
       )}
     </AdminLayout>

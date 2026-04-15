@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, Fragment } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment, memo } from "react";
 import { useRouter } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
 import Badge from "@/components/ui/Badge";
@@ -19,13 +19,14 @@ import {
   Timestamp,
   GeoPoint,
   query,
+  where,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { writeLog, buildDescription } from "@/lib/activitylog";
 import {
   Search, ChevronDown, ChevronUp, X,
   Users, ArrowUpDown, ExternalLink, Clock, ShieldOff,
-  Ban, ShieldCheck, Trash2, AlertTriangle, Briefcase,
+  Ban, ShieldCheck, Trash2, AlertTriangle, Briefcase, CheckCircle,
 } from "lucide-react";
 
 // ─── Gig types (for user gigs panel) ──────────────────────────────────────────
@@ -100,6 +101,7 @@ interface AppUser {
 
 type SortField = "createdAt" | "balance" | "name";
 type SortDir = "asc" | "desc";
+type StatusFilter = "all" | "online" | "offline" | "suspended" | "banned";
 
 const SORT_LABELS: Record<SortField, { label: string; asc: string; desc: string }> = {
   name:      { label: "Name",    asc: "A → Z",        desc: "Z → A"        },
@@ -353,12 +355,13 @@ interface ExpandedRowProps {
   onDelete: () => void;
   actionLoading: string | null;
   onViewGigs: () => void;
+  onViewWorkedGigs: () => void;
 }
 
-function ExpandedRow({
+const ExpandedRow = memo(function ExpandedRow({
   user, colSpan, applicableTier, suspended, canSuspend,
   onViewProfile, onSuspend, onLiftSuspension, onBan, onUnban, onDelete,
-  actionLoading, onViewGigs,
+  actionLoading, onViewGigs, onViewWorkedGigs,
 }: ExpandedRowProps) {
   return (
     <tr>
@@ -523,7 +526,15 @@ function ExpandedRow({
             icon={Briefcase}
             onClick={onViewGigs}
           >
-            View Gigs
+            Gigs Posted
+          </Button>
+
+          <Button
+            variant="secondary" size="sm"
+            icon={CheckCircle}
+            onClick={onViewWorkedGigs}
+          >
+            Gigs Completed
           </Button>
 
           <Button
@@ -540,7 +551,7 @@ function ExpandedRow({
       </td>
     </tr>
   );
-}
+});
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -564,25 +575,35 @@ export default function UsersPage() {
   const [targetUser, setTargetUser]         = useState<AppUser | null>(null);
   const [actionLoading, setActionLoading]   = useState<string | null>(null);
   const [suspendModalOpen, setSuspendModalOpen] = useState(false);
-  const [userGigsMap, setUserGigsMap]           = useState<Record<string, UserGig[]>>({});
-  const [gigsLoadingId, setGigsLoadingId]       = useState<string | null>(null);
-  const [gigsModalUser, setGigsModalUser]       = useState<AppUser | null>(null);
+  const [statusFilter, setStatusFilter]         = useState<StatusFilter>("all");
+  const [banReason, setBanReason]               = useState("");
+  const [userGigsMap, setUserGigsMap]             = useState<Record<string, UserGig[]>>({});
+  const [gigsLoadingId, setGigsLoadingId]         = useState<string | null>(null);
+  const [gigsModalUser, setGigsModalUser]         = useState<AppUser | null>(null);
+  const [workedGigsMap, setWorkedGigsMap]         = useState<Record<string, UserGig[]>>({});
+  const [workedGigsLoadingId, setWorkedGigsLoadingId] = useState<string | null>(null);
+  const [workedGigsModalUser, setWorkedGigsModalUser] = useState<AppUser | null>(null);
 
   const isSorted = sortField !== null;
 
-  // ── Fetch gigs for a user ─────────────────────────────────────────────────
+  const userGigsMapRef    = useRef(userGigsMap);
+  const workedGigsMapRef  = useRef(workedGigsMap);
+  useEffect(() => { userGigsMapRef.current   = userGigsMap;   }, [userGigsMap]);
+  useEffect(() => { workedGigsMapRef.current = workedGigsMap; }, [workedGigsMap]);
+
+  // ── Fetch gigs posted by a user (hostId) ─────────────────────────────────
   const fetchUserGigs = useCallback(async (userId: string) => {
-    if (userGigsMap[userId]) return; // already loaded
+    if (userGigsMapRef.current[userId]) return; // already loaded
     setGigsLoadingId(userId);
     try {
       const types: GigType[] = ["offered", "open", "quick"];
       const snaps = await Promise.all(
-        types.map((t) => getDocs(collection(db, GIG_COLLECTIONS[t])))
+        types.map((t) =>
+          getDocs(query(collection(db, GIG_COLLECTIONS[t]), where("hostId", "==", userId)))
+        )
       );
       const gigs: UserGig[] = snaps.flatMap((snap, i) =>
-        snap.docs
-          .map((d) => ({ id: d.id, gigType: types[i], ...d.data() } as UserGig))
-          .filter((g) => (g as any).hostId === userId)
+        snap.docs.map((d) => ({ id: d.id, gigType: types[i], ...d.data() } as UserGig))
       );
       setUserGigsMap((prev) => ({ ...prev, [userId]: gigs }));
     } catch (err) {
@@ -591,7 +612,30 @@ export default function UsersPage() {
     } finally {
       setGigsLoadingId(null);
     }
-  }, [userGigsMap]);
+  }, []);
+
+  // ── Fetch gigs worked by a user (workerId) ────────────────────────────────
+  const fetchWorkedGigs = useCallback(async (userId: string) => {
+    if (workedGigsMapRef.current[userId]) return; // already loaded
+    setWorkedGigsLoadingId(userId);
+    try {
+      const types: GigType[] = ["offered", "open", "quick"];
+      const snaps = await Promise.all(
+        types.map((t) =>
+          getDocs(query(collection(db, GIG_COLLECTIONS[t]), where("workerId", "==", userId)))
+        )
+      );
+      const gigs: UserGig[] = snaps.flatMap((snap, i) =>
+        snap.docs.map((d) => ({ id: d.id, gigType: types[i], ...d.data() } as UserGig))
+      );
+      setWorkedGigsMap((prev) => ({ ...prev, [userId]: gigs }));
+    } catch (err) {
+      console.error("[UsersPage] fetchWorkedGigs error:", err);
+      setWorkedGigsMap((prev) => ({ ...prev, [userId]: [] }));
+    } finally {
+      setWorkedGigsLoadingId(null);
+    }
+  }, []);
 
   // ── Load suspension tier config ───────────────────────────────────────────
   useEffect(() => {
@@ -636,6 +680,7 @@ export default function UsersPage() {
     if (actionLoading) return;
     setConfirmAction(null);
     setTargetUser(null);
+    setBanReason("");
   }, [actionLoading]);
 
   const handleSuspend = useCallback(async (durationMinutes: number, tierLabel: string) => {
@@ -701,6 +746,7 @@ export default function UsersPage() {
     try {
       await updateDoc(doc(db, "users", targetUser.id), {
         isBanned: true,
+        ban_reason: banReason.trim() || null,
         suspended_until: null,
         updatedAt: serverTimestamp(),
       });
@@ -714,6 +760,7 @@ export default function UsersPage() {
         targetId: targetUser.id,
         targetName: targetUser.name,
         affectedFiles: [`users/${targetUser.id}`],
+        meta: banReason.trim() ? { other: { reason: banReason.trim() } } : undefined,
       });
       closeConfirm();
     } catch (err) {
@@ -721,7 +768,7 @@ export default function UsersPage() {
     } finally {
       setActionLoading(null);
     }
-  }, [targetUser, adminUser, closeConfirm]);
+  }, [targetUser, adminUser, banReason, closeConfirm]);
 
   const handleUnban = useCallback(async () => {
     if (!targetUser || !adminUser) return;
@@ -804,6 +851,7 @@ export default function UsersPage() {
   }, []);
 
   // ── Filter + sort ─────────────────────────────────────────────────────────
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = q
@@ -814,6 +862,18 @@ export default function UsersPage() {
           u.userId.toLowerCase().includes(q)
         )
       : users;
+
+    if (statusFilter !== "all") {
+      list = list.filter((u) => {
+        const suspended = isCurrentlySuspended(u);
+        switch (statusFilter) {
+          case "online":    return u.isOnline && !u.isBanned && !suspended;
+          case "offline":   return !u.isOnline && !u.isBanned && !suspended;
+          case "suspended": return suspended && !u.isBanned;
+          case "banned":    return u.isBanned;
+        }
+      });
+    }
 
     if (sortField) {
       list = [...list].sort((a, b) => {
@@ -831,7 +891,7 @@ export default function UsersPage() {
       });
     }
     return list;
-  }, [users, search, sortField, sortDir]);
+  }, [users, search, sortField, sortDir, statusFilter]);
 
   // ── Pagination ────────────────────────────────────────────────────────────
   const totalPages  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -839,7 +899,7 @@ export default function UsersPage() {
   const paged       = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const onlineCount = users.filter((u) => u.isOnline).length;
 
-  const COL_SPAN = 7;
+  const COL_SPAN = 8;
 
   // ── Confirm dialog content ────────────────────────────────────────────────
   const confirmConfig: Record<
@@ -886,6 +946,14 @@ export default function UsersPage() {
         .up-stats { display: flex; align-items: center; gap: 20px; padding: 14px 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
         .up-stat { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-secondary); }
         .up-stat strong { color: var(--text-primary); font-size: 14px; }
+
+        /* filter bar */
+        .up-filter-bar { display: flex; align-items: center; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+        .up-filter-btn { display: flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 20px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-secondary); font-size: 11.5px; font-family: inherit; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+        .up-filter-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .up-filter-btn.active { font-weight: 600; border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
+        .up-filter-count { font-size: 10.5px; background: var(--bg-page); border: 1px solid var(--border-muted); border-radius: 10px; padding: 0 5px; min-width: 18px; text-align: center; color: var(--text-muted); line-height: 1.6; }
+        .up-filter-btn.active .up-filter-count { border-color: currentColor; color: inherit; opacity: 0.75; }
 
         /* toolbar */
         .up-toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -955,6 +1023,37 @@ export default function UsersPage() {
                 <span>{filtered.length} result{filtered.length !== 1 ? "s" : ""} for "{search}"</span>
               </div>
             )}
+          </div>
+
+          {/* Status filter bar */}
+          <div className="up-filter-bar">
+            {(["all", "online", "offline", "suspended", "banned"] as StatusFilter[]).map((f) => {
+              const counts: Record<StatusFilter, number> = {
+                all:       users.length,
+                online:    users.filter((u) => u.isOnline && !u.isBanned && !isCurrentlySuspended(u)).length,
+                offline:   users.filter((u) => !u.isOnline && !u.isBanned && !isCurrentlySuspended(u)).length,
+                suspended: users.filter((u) => isCurrentlySuspended(u) && !u.isBanned).length,
+                banned:    users.filter((u) => u.isBanned).length,
+              };
+              const labels: Record<StatusFilter, string> = {
+                all: "All", online: "Online", offline: "Offline",
+                suspended: "Suspended", banned: "Banned",
+              };
+              const colors: Partial<Record<StatusFilter, string>> = {
+                online: "var(--green)", suspended: "var(--orange)", banned: "var(--red)",
+              };
+              return (
+                <button
+                  key={f}
+                  className={`up-filter-btn${statusFilter === f ? " active" : ""}`}
+                  style={statusFilter === f && colors[f] ? { borderColor: colors[f], color: colors[f], background: `color-mix(in srgb, ${colors[f]} 12%, transparent)` } : undefined}
+                  onClick={() => { setStatusFilter(f); setPage(1); }}
+                >
+                  {labels[f]}
+                  <span className="up-filter-count">{counts[f]}</span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Toolbar */}
@@ -1028,6 +1127,7 @@ export default function UsersPage() {
               <thead>
                 <tr>
                   <th>Name</th>
+                  <th>User ID</th>
                   <th>Phone</th>
                   <th>Balance</th>
                   <th>Joined</th>
@@ -1068,6 +1168,9 @@ export default function UsersPage() {
                             <div className="up-name">{user.name}</div>
                             <div className="up-sub">{user.email}</div>
                           </td>
+                          <td>
+                            <div className="up-sub" style={{ fontFamily: "monospace", fontSize: "0.75rem" }}>{user.userId}</div>
+                          </td>
                           <td>{user.phone}</td>
                           <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>
                             {formatBalance(user.balance)}
@@ -1102,6 +1205,10 @@ export default function UsersPage() {
                             onViewGigs={() => {
                               setGigsModalUser(user);
                               fetchUserGigs(user.id);
+                            }}
+                            onViewWorkedGigs={() => {
+                              setWorkedGigsModalUser(user);
+                              fetchWorkedGigs(user.id);
                             }}
                           />
                         )}
@@ -1172,15 +1279,36 @@ export default function UsersPage() {
           confirmLabel={confirmConfig[confirmAction].label}
           danger={confirmConfig[confirmAction].danger}
           loading={actionLoading !== null}
-        />
+        >
+          {confirmAction === "ban" && (
+            <div style={{ marginTop: 14 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+                Reason <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>(optional)</span>
+              </label>
+              <textarea
+                rows={3}
+                placeholder="e.g. Repeated policy violations, fraudulent activity…"
+                value={banReason}
+                onChange={(e) => setBanReason(e.target.value)}
+                style={{
+                  width: "100%", resize: "vertical", padding: "8px 10px",
+                  background: "var(--bg-elevated)", border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)", color: "var(--text-primary)",
+                  fontSize: 13, fontFamily: "inherit", lineHeight: 1.5,
+                  outline: "none", boxSizing: "border-box",
+                }}
+              />
+            </div>
+          )}
+        </ConfirmDialog>
       )}
 
-      {/* User Gigs modal */}
+      {/* Gigs Posted modal */}
       {gigsModalUser && (
         <Modal
           open
           onClose={() => setGigsModalUser(null)}
-          title={`${gigsModalUser.name}'s Gigs`}
+          title={`${gigsModalUser.name} — Gigs Posted`}
           description={`All gigs posted by ${gigsModalUser.email}`}
           size="lg"
         >
@@ -1208,6 +1336,69 @@ export default function UsersPage() {
           ) : (
             <div className="ug-list">
               {userGigsMap[gigsModalUser.id].map((g) => {
+                const statusKey = g.status?.toLowerCase();
+                const statusClass =
+                  statusKey === "available" ? "ug-chip--available" :
+                  statusKey === "completed"  ? "ug-chip--completed"  :
+                  statusKey === "cancelled"  ? "ug-chip--cancelled"  : "ug-chip--other";
+                const statusLabel =
+                  statusKey === "cancelled" && g.cancelledByAdmin ? "Cancelled by Admin" :
+                  g.status ? g.status.charAt(0).toUpperCase() + g.status.slice(1) : "Unknown";
+                return (
+                  <div key={g.id} className="ug-gig">
+                    <div>
+                      <div className="ug-gig-title">{g.title || "Untitled Gig"}</div>
+                      {g.category && <div className="ug-gig-cat">{g.category}</div>}
+                    </div>
+                    <span className={`ug-chip ug-chip--${g.gigType}`}>{GIG_TYPE_LABELS[g.gigType]}</span>
+                    <span className={`ug-chip ${statusClass}`}>{statusLabel}</span>
+                    <span className="ug-salary">
+                      {g.salary != null && g.salary !== "" ? `₱${g.salary}` : "—"}
+                    </span>
+                    <span className="ug-date">
+                      {g.createdAt ? g.createdAt.toDate().toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* Gigs Completed (worked) modal */}
+      {workedGigsModalUser && (
+        <Modal
+          open
+          onClose={() => setWorkedGigsModalUser(null)}
+          title={`${workedGigsModalUser.name} — Gigs Completed`}
+          description={`Gigs where ${workedGigsModalUser.email} was the worker`}
+          size="lg"
+        >
+          <style>{`
+            .ug-list { display: flex; flex-direction: column; gap: 8px; }
+            .ug-gig { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 10px; align-items: center; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elevated); }
+            .ug-gig-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+            .ug-gig-cat { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+            .ug-chip { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+            .ug-chip--offered { background: rgba(245,158,11,0.12); color: var(--amber,#f59e0b); }
+            .ug-chip--open    { background: rgba(59,130,246,0.12); color: var(--blue); }
+            .ug-chip--quick   { background: rgba(139,92,246,0.12); color: var(--purple,#8b5cf6); }
+            .ug-chip--available  { background: rgba(16,185,129,0.12); color: var(--green); }
+            .ug-chip--completed  { background: rgba(59,130,246,0.12); color: var(--blue); }
+            .ug-chip--cancelled  { background: rgba(239,68,68,0.12); color: var(--red); }
+            .ug-chip--other      { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border); }
+            .ug-salary { font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+            .ug-date { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+            .ug-empty { padding: 32px 0; text-align: center; color: var(--text-muted); font-size: 13px; }
+          `}</style>
+          {workedGigsLoadingId === workedGigsModalUser.id ? (
+            <div className="ug-empty">Loading gigs…</div>
+          ) : !workedGigsMap[workedGigsModalUser.id] || workedGigsMap[workedGigsModalUser.id].length === 0 ? (
+            <div className="ug-empty">No gigs worked by this user.</div>
+          ) : (
+            <div className="ug-list">
+              {workedGigsMap[workedGigsModalUser.id].map((g) => {
                 const statusKey = g.status?.toLowerCase();
                 const statusClass =
                   statusKey === "available" ? "ug-chip--available" :

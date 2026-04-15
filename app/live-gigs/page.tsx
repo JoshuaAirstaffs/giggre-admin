@@ -637,8 +637,6 @@ export default function LiveGigsPage() {
                   <th>Gig</th>
                   <th>Type</th>
                   <th>Status</th>
-                  <th>Vacancies</th>
-                  <th>Slots</th>
                   <th>Applications</th>
                   <th>Posted</th>
                   <th>Actions</th>
@@ -691,12 +689,6 @@ export default function LiveGigsPage() {
                                   ? gig.status.charAt(0).toUpperCase() + gig.status.slice(1)
                                   : "Unknown"}
                           </span>
-                        </td>
-                        <td>
-                          <span className="lg-num">{gig.vacancy ?? "—"}</span>
-                        </td>
-                        <td>
-                          <span className="lg-num">{gig.slot ?? "—"}</span>
                         </td>
                         <td>
                           <span className="lg-num">{appCount}</span>
@@ -985,7 +977,7 @@ function GigExpandPanel({ gig }: { gig: Gig }) {
           )}
           <DetailItem label="Posted" value={formatDate(gig.createdAt)} />
           {gig.salary !== undefined && gig.salary !== null && gig.salary !== "" && (
-            <DetailItem label="Salary" value={`₱${gig.salary}`} />
+            <DetailItem label="Salary" value={`$${gig.salary}`} />
           )}
           {gig.vacancy !== undefined && (
             <DetailItem label="Vacancies" value={String(gig.vacancy ?? "—")} />
