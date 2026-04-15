@@ -254,3 +254,21 @@
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+.messages-load-more-spinner {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.messages-loading-more,
+.messages-end-label {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.messages-bubble.pending {
+  opacity: 0.6;
+}

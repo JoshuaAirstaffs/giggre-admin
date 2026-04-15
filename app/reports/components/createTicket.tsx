@@ -228,7 +228,8 @@ const CreateTicket = () => {
         message: selectedMessage.trim(),
         createdBy: null, // TODO: replace with currentAdmin.uid
         status: "open",
-        hasRead: false,
+        hasSeen: false, //for user
+        hasSeenByAdmin: true, //for admin
         roomId: null,
         createdAt: serverTimestamp(),
         userId: null,
