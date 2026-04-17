@@ -10,6 +10,8 @@ import { toast } from "@/components/ui/Toaster"
 
 type TicketStatus = 'open' | 'in progress' | 'resolved'
 
+const PAGE_SIZE = 15
+
 interface SupportTicket {
   ticket_number: string
   id: string
@@ -53,6 +55,15 @@ const TicketsTab = () => {
   const [selectedStatus, setSelectedStatus] = useState<TicketStatus>('open')
   const [updating, setUpdating] = useState(false)
 
+  //pagination
+  const [page, setPage] = useState(1)
+ const totalPages = Math.max(1, Math.ceil(tickets.length / PAGE_SIZE))
+const safePage = Math.min(page, totalPages)
+
+const pagedTickets = tickets.slice(
+  (safePage - 1) * PAGE_SIZE,
+  safePage * PAGE_SIZE
+)
   useEffect(() => {
     setMounted(true)
     fetchTicketData()
@@ -219,7 +230,7 @@ const TicketsTab = () => {
         )}
 
         <span className="ticket-filter-count">
-          {filteredTickets.length} of {tickets.length}
+          {pagedTickets.length} of {tickets.length}
         </span>
       </div>
 
@@ -236,14 +247,14 @@ const TicketsTab = () => {
             </tr>
           </thead>
           <tbody>
-            {filteredTickets.length === 0 ? (
+            {pagedTickets.length === 0 ? (
               <tr>
                 <td colSpan={6} style={{ textAlign: "center", color: "var(--text-muted)", padding: "2rem" }}>
                   No tickets match your filters.
                 </td>
               </tr>
             ) : (
-              filteredTickets.map((ticket) => (
+              pagedTickets.map((ticket) => (
                 <tr key={ticket.id}>
                   <td>{ticket.ticket_number}</td>
                   <td><div className="admin-name">{ticket.name || "Giggre Support"}</div></td>
@@ -263,6 +274,38 @@ const TicketsTab = () => {
             )}
           </tbody>
         </table>
+         <div className="up-pg">
+              <span className="up-pg-info">
+                {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, tickets.length)} of {tickets.length} tickets
+              </span>
+              <div className="up-pg-btns">
+                <button className="up-pg-btn" onClick={() => setPage(1)} disabled={safePage === 1}>«</button>
+                <button className="up-pg-btn" onClick={() => setPage((p) => p - 1)} disabled={safePage === 1}>‹</button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter((p) => Math.abs(p - safePage) <= 2 || p === 1 || p === totalPages)
+                  .reduce<(number | "…")[]>((acc, p, i, arr) => {
+                    if (i > 0 && (p as number) - (arr[i - 1] as number) > 1) acc.push("…");
+                    acc.push(p);
+                    return acc;
+                  }, [])
+                  .map((p, i) =>
+                    p === "…" ? (
+                      <span key={`e${i}`} style={{ padding: "0 4px", color: "var(--text-muted)", fontSize: 12 }}>…</span>
+                    ) : (
+                      <button
+                        key={p}
+                        className={`up-pg-btn${p === safePage ? " active" : ""}`}
+                        onClick={() => setPage(p as number)}
+                        disabled={p === safePage}
+                      >
+                        {p}
+                      </button>
+                    )
+                  )}
+                <button className="up-pg-btn" onClick={() => setPage((p) => p + 1)} disabled={safePage === totalPages}>›</button>
+                <button className="up-pg-btn" onClick={() => setPage(totalPages)} disabled={safePage === totalPages}>»</button>
+              </div>
+            </div>
       </div>
 
       {/* View modal */}
