@@ -27,6 +27,18 @@ export interface GigMarker {
   createdAt?: Timestamp | null;
 }
 
+export interface UserMarker {
+  id: string;
+  name: string;
+  role: string;
+  isOnline: boolean;
+  lat: number;
+  lng: number;
+  email?: string;
+  isBanned?: boolean;
+  isSuspended?: boolean;
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const GIG_COLORS: Record<GigType, string> = {
@@ -62,18 +74,46 @@ function createGigIcon(gigType: GigType): L.DivIcon {
   });
 }
 
+function createUserIcon(isOnline: boolean, isBanned?: boolean, isSuspended?: boolean): L.DivIcon {
+  const color = isBanned ? "#EF4444" : isSuspended ? "#F59E0B" : isOnline ? "#10B981" : "#64748B";
+  const pulse = isOnline && !isBanned && !isSuspended;
+  return L.divIcon({
+    html: `<div style="position:relative;width:20px;height:20px;">
+      ${pulse ? `<div style="
+        position:absolute;inset:-4px;border-radius:50%;
+        background:${color};opacity:0.25;
+        animation:user-pulse 1.8s ease-in-out infinite;
+      "></div>` : ""}
+      <div style="
+        position:relative;width:20px;height:20px;border-radius:50%;
+        background:${color};border:2.5px solid rgba(255,255,255,0.9);
+        box-shadow:0 1px 8px rgba(0,0,0,0.5);
+        display:flex;align-items:center;justify-content:center;
+      ">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/>
+        </svg>
+      </div>
+    </div>`,
+    className: "",
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+    popupAnchor: [0, -14],
+  });
+}
+
 
 // ─── Fit Bounds Helper ────────────────────────────────────────────────────────
 
-function FitBounds({ markers }: { markers: GigMarker[] }) {
+function FitBounds({ points }: { points: { lat: number; lng: number }[] }) {
   const map = useMap();
   useEffect(() => {
-    if (markers.length === 0) return;
-    const bounds = L.latLngBounds(markers.map((m) => [m.lat, m.lng]));
+    if (points.length === 0) return;
+    const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng]));
     map.fitBounds(bounds, { padding: [48, 48], maxZoom: 13 });
-  // Only fit on initial marker load, not every update
+  // Only fit on initial load
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markers.length > 0 ? "has-markers" : "no-markers"]);
+  }, [points.length > 0 ? "has-points" : "no-points"]);
   return null;
 }
 
@@ -133,6 +173,52 @@ function PopupRow({ label, labelColor, valueColor, children }: { label: string; 
         {label}
       </span>
       <span style={{ fontSize: 12, color: valueColor, textAlign: "right" }}>{children}</span>
+    </div>
+  );
+}
+
+// ─── User Popup ───────────────────────────────────────────────────────────────
+
+function UserPopup({ user, theme }: { user: UserMarker; theme: MapTheme }) {
+  const pt = POPUP_THEME[theme];
+  const statusColor = user.isBanned
+    ? "#EF4444"
+    : user.isSuspended
+    ? "#F59E0B"
+    : user.isOnline
+    ? "#10B981"
+    : "#64748B";
+  const statusLabel = user.isBanned
+    ? "Banned"
+    : user.isSuspended
+    ? "Suspended"
+    : user.isOnline
+    ? "Online"
+    : "Offline";
+
+  return (
+    <div style={{ minWidth: 180, fontFamily: "DM Sans, sans-serif" }}>
+      <div style={{ marginBottom: 6 }}>
+        <span style={{
+          display: "inline-flex", alignItems: "center", gap: 5,
+          padding: "2px 8px", borderRadius: 20,
+          background: `${statusColor}22`, color: statusColor,
+          fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em",
+        }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: statusColor, display: "inline-block" }} />
+          {statusLabel}
+        </span>
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: pt.title, marginBottom: 6, lineHeight: 1.3 }}>
+        {user.name || "Unknown User"}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {user.role && <PopupRow label="Role" labelColor={pt.label} valueColor={pt.value}>{user.role}</PopupRow>}
+        {user.email && <PopupRow label="Email" labelColor={pt.label} valueColor={pt.value}>{user.email}</PopupRow>}
+        <PopupRow label="Coords" labelColor={pt.label} valueColor={pt.value}>
+          {user.lat.toFixed(4)}, {user.lng.toFixed(4)}
+        </PopupRow>
+      </div>
     </div>
   );
 }
@@ -248,12 +334,31 @@ interface ClusterPopupState {
   gigs: GigMarker[];
 }
 
-export default function MapView({ markers, theme = "dark" }: { markers: GigMarker[]; theme?: MapTheme }) {
+export default function MapView({
+  markers,
+  userMarkers = [],
+  showGigs = true,
+  showUsers = true,
+  theme = "dark",
+}: {
+  markers: GigMarker[];
+  userMarkers?: UserMarker[];
+  showGigs?: boolean;
+  showUsers?: boolean;
+  theme?: MapTheme;
+}) {
   const memoMarkers = useMemo(() => markers, [markers]);
+  const memoUsers = useMemo(() => userMarkers, [userMarkers]);
   const pt = POPUP_THEME[theme];
   const [clusterPopup, setClusterPopup] = useState<ClusterPopupState | null>(null);
 
   useEffect(() => { setClusterPopup(null); }, [theme]);
+
+  const allMarkersForBounds = useMemo(() => {
+    const gigPoints = memoMarkers.map((m) => ({ lat: m.lat, lng: m.lng }));
+    const userPoints = memoUsers.map((u) => ({ lat: u.lat, lng: u.lng }));
+    return [...gigPoints, ...userPoints];
+  }, [memoMarkers, memoUsers]);
 
   function handleClusterClick(e: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
     const childMarkers: L.Marker[] = e.layer.getAllChildMarkers();
@@ -310,6 +415,10 @@ export default function MapView({ markers, theme = "dark" }: { markers: GigMarke
           margin-right: -1px;
           margin-bottom: -1px;
         }
+        @keyframes user-pulse {
+          0%, 100% { transform: scale(1); opacity: 0.25; }
+          50% { transform: scale(1.6); opacity: 0; }
+        }
       `}</style>
       <MapContainer
         center={DEFAULT_CENTER}
@@ -327,31 +436,77 @@ export default function MapView({ markers, theme = "dark" }: { markers: GigMarke
           detectRetina
         />
 
-        {memoMarkers.length > 0 && <FitBounds markers={memoMarkers} />}
+        {allMarkersForBounds.length > 0 && (
+          <FitBounds points={allMarkersForBounds} />
+        )}
 
-        {/* key={theme} forces remount so iconCreateFunction always uses the current theme */}
-        <MarkerClusterGroup
-          key={theme}
-          chunkedLoading
-          iconCreateFunction={(cluster: any) => createClusterIconThemed(cluster, theme)} // eslint-disable-line @typescript-eslint/no-explicit-any
-          maxClusterRadius={50}
-          zoomToBoundsOnClick={false}
-          spiderfyOnMaxZoom={false}
-          showCoverageOnHover={false}
-          eventHandlers={{ clusterclick: handleClusterClick }}
-        >
-          {memoMarkers.map((gig) => (
-            <Marker
-              key={gig.id}
-              position={[gig.lat, gig.lng]}
-              icon={createGigIcon(gig.gigType)}
-            >
-              <Popup>
-                <GigPopup gig={gig} theme={theme} />
-              </Popup>
-            </Marker>
-          ))}
-        </MarkerClusterGroup>
+        {/* Gig markers cluster */}
+        {showGigs && (
+          <MarkerClusterGroup
+            key={`gigs-${theme}`}
+            chunkedLoading
+            iconCreateFunction={(cluster: any) => createClusterIconThemed(cluster, theme)} // eslint-disable-line @typescript-eslint/no-explicit-any
+            maxClusterRadius={50}
+            zoomToBoundsOnClick={false}
+            spiderfyOnMaxZoom={false}
+            showCoverageOnHover={false}
+            eventHandlers={{ clusterclick: handleClusterClick }}
+          >
+            {memoMarkers.map((gig) => (
+              <Marker
+                key={gig.id}
+                position={[gig.lat, gig.lng]}
+                icon={createGigIcon(gig.gigType)}
+              >
+                <Popup>
+                  <GigPopup gig={gig} theme={theme} />
+                </Popup>
+              </Marker>
+            ))}
+          </MarkerClusterGroup>
+        )}
+
+        {/* User markers cluster */}
+        {showUsers && (
+          <MarkerClusterGroup
+            key={`users-${theme}`}
+            chunkedLoading
+            iconCreateFunction={(cluster: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+              const count = cluster.getChildCount();
+              const size = count < 10 ? 34 : count < 100 ? 40 : 46;
+              const isDark = theme === "dark";
+              return L.divIcon({
+                html: `<div style="
+                  width:${size}px;height:${size}px;border-radius:50%;
+                  background:${isDark ? "#111827" : "#ffffff"};border:2px solid #10B981;
+                  display:flex;align-items:center;justify-content:center;
+                  color:${isDark ? "#F1F5F9" : "#1e293b"};font-family:'Space Mono',monospace;
+                  font-size:11px;font-weight:700;
+                  box-shadow:0 2px 8px rgba(0,0,0,${isDark ? "0.5" : "0.2"});
+                ">${count}</div>`,
+                className: "",
+                iconSize: [size, size],
+                iconAnchor: [size / 2, size / 2],
+              });
+            }}
+            maxClusterRadius={40}
+            zoomToBoundsOnClick={true}
+            spiderfyOnMaxZoom={true}
+            showCoverageOnHover={false}
+          >
+            {memoUsers.map((user) => (
+              <Marker
+                key={user.id}
+                position={[user.lat, user.lng]}
+                icon={createUserIcon(user.isOnline, user.isBanned, user.isSuspended)}
+              >
+                <Popup>
+                  <UserPopup user={user} theme={theme} />
+                </Popup>
+              </Marker>
+            ))}
+          </MarkerClusterGroup>
+        )}
 
         {clusterPopup && (
           <Popup

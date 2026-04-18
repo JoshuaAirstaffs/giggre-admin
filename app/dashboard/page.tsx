@@ -598,7 +598,7 @@ export default function DashboardPage() {
             <QuickLink href="/live-map"           icon={<Map size={14} />}        label="Live Map"           accent="var(--green)"  />
             <QuickLink href="/admins"             icon={<Shield size={14} />}     label="Admins"             accent="var(--purple)" />
             <QuickLink href="/activity-logs"      icon={<Activity size={14} />}   label="Activity Logs"      accent="var(--blue)"   />
-            <QuickLink href="/reports"            icon={<BarChart2 size={14} />}  label="Support / Reports"  accent="var(--teal, #0d9488)"  />
+            <QuickLink href="/support"            icon={<BarChart2 size={14} />}  label="Support"            accent="var(--teal, #0d9488)"  />
             <QuickLink href="/settings"           icon={<Settings size={14} />}   label="Settings"           accent="var(--text-muted)"     />
             <QuickLink href="/content-management" icon={<File size={14} />}       label="Content Management" accent="var(--indigo, #6366f1)" />
           </div>

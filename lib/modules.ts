@@ -27,7 +27,7 @@ export const ALL_MODULES: ModuleMeta[] = [
   { key: "live-map",           label: "Live Map",                href: "/live-map" },
   { key: "admins",             label: "Admin Management",        href: "/admins",        superAdminOnly: true },
   { key: "announcements",      label: "Announcements",           href: "/announcements" },
-  { key: "reports",            label: "Reports",                 href: "/reports" },
+  { key: "reports",            label: "Support",                 href: "/support" },
   { key: "settings",           label: "Settings",                href: "/settings" },
   { key: "library-gsin",       label: "Skills (GSIN Library)",   href: "/library-gsin" },
   { key: "quick-gigs",         label: "Quick Gigs Configuration",  href: "/quick-gigs" },

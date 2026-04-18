@@ -30,7 +30,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/live-map",      icon: Map,             label: "Live Map",      module: "live-map" },
   { href: "/admins",        icon: Shield,          label: "Admins",        module: "admins" },
   { href: "/announcements", icon: MegaphoneIcon,   label: "Announcements", module: "announcements" },
-  { href: "/reports",       icon: BarChart2,       label: "Support",       module: "reports" },
+  { href: "/support",       icon: BarChart2,       label: "Support",       module: "reports" },
   { href: "/settings",      icon: Settings,        label: "Settings",      module: "settings" },
   { href: "/content-management",      icon: File,        label: "Content Management",      module: "content-management" },
 ];

@@ -65,6 +65,11 @@ export const MODULE_CONFIG: Record<string, ModuleConfig> = {
     variant: "orange",
     accentColor: "var(--orange)",
   },
+  user_requests: {
+    label: "User Requests",
+    variant: "teal",
+    accentColor: "var(--teal, #0d9488)",
+  },
 } satisfies Record<string, ModuleConfig>;
 
 // ─── Action Config ────────────────────────────────────────────────────────────
@@ -116,6 +121,12 @@ export const ACTION_CONFIG: Record<string, ActionConfig> = {
 
   // ── settings  (module variant: gray) ─────────────────────────────────────
   settings_updated: { label: "Settings Updated", variant: "gray" },
+
+  // ── user_requests  (module variant: teal) ────────────────────────────────
+  user_request_approved: { label: "Request Approved", variant: "green" },
+  user_request_rejected: { label: "Request Rejected", variant: "red"   },
+  user_request_reopened: { label: "Request Reopened", variant: "amber" },
+  user_request_note:     { label: "Progress Note",    variant: "gray"  },
 } satisfies Record<string, ActionConfig>;
 
 // ─── Accessors ────────────────────────────────────────────────────────────────

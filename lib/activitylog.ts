@@ -52,6 +52,12 @@ export type SkillLogAction =
 
 export type SettingsLogAction = "settings_updated";
 
+export type UserRequestLogAction =
+  | "user_request_approved"
+  | "user_request_rejected"
+  | "user_request_reopened"
+  | "user_request_note";
+
 export type LogAction =
   | AdminLogAction
   | ContentLogAction
@@ -59,7 +65,8 @@ export type LogAction =
   | GigLogAction
   | QuickGigLogAction
   | SkillLogAction
-  | SettingsLogAction;
+  | SettingsLogAction
+  | UserRequestLogAction;
 
 export type LogModule =
   | "admin_management"
@@ -70,7 +77,8 @@ export type LogModule =
   | "settings"
   | "announcements"
   | "library"
-  | "quick_gig_config";
+  | "quick_gig_config"
+  | "user_requests";
 
 export type ContentSectionKey =
   | "carousel_items"
@@ -215,6 +223,17 @@ export const buildDescription = {
 
   settingsUpdated: (section: string) =>
     `Updated platform settings — ${section}`,
+
+  // ── User requests ─────────────────────────────────────────────────────────
+
+  userRequestApproved: (ticketNumber: string, skillName: string, userName: string) =>
+    `Approved request ${ticketNumber} — "${skillName}" for ${userName}`,
+
+  userRequestRejected: (ticketNumber: string, skillName: string, userName: string, reason: string) =>
+    `Rejected request ${ticketNumber} — "${skillName}" for ${userName}: ${reason}`,
+
+  userRequestReopened: (ticketNumber: string, skillName: string, userName: string) =>
+    `Reopened request ${ticketNumber} — "${skillName}" for ${userName} (reset to pending)`,
 };
 
 // ─── writeLog ────────────────────────────────────────────────────────────────

@@ -16,7 +16,8 @@ import {
   DocumentData,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { Search, Filter, RefreshCw, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { Search, Filter, RefreshCw, ChevronLeft, ChevronRight, X, User } from "lucide-react";
+import Modal from "@/components/ui/Modal";
 import type { LogAction } from "@/lib/activitylog";
 import Badge from "@/components/ui/Badge";
 import {
@@ -112,7 +113,11 @@ export default function ActivityLogsPage() {
   const [moduleFilter, setModuleFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [actorFilter, setActorFilter] = useState("");
   const [showFilters, setShowFilters] = useState(false);
+
+  // Detail modal
+  const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
 
   // Pagination
   const [page, setPage] = useState(1);
@@ -121,7 +126,7 @@ export default function ActivityLogsPage() {
   >([]);
   const [hasMore, setHasMore] = useState(false);
 
-  const activeFilterCount = [actionFilter, moduleFilter, dateFrom, dateTo].filter(Boolean).length;
+  const activeFilterCount = [actionFilter, moduleFilter, dateFrom, dateTo, actorFilter].filter(Boolean).length;
 
   // ── Core fetch ────────────────────────────────────────────────────────────
   const fetchPage = useCallback(
@@ -243,20 +248,31 @@ export default function ActivityLogsPage() {
     setDateFrom("");
     setDateTo("");
     setSearch("");
+    setActorFilter("");
   };
 
-  // ── Client-side search across the fetched page ────────────────────────────
+  // ── Client-side search + actor filter across the fetched page ───────────
   const filtered = logs.filter((log) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      log.actorName.toLowerCase().includes(q) ||
-      (log.actorEmail ?? "").toLowerCase().includes(q) ||
-      (log.targetName ?? "").toLowerCase().includes(q) ||
-      (log.targetSection ?? "").toLowerCase().includes(q) ||
-      log.description.toLowerCase().includes(q) ||
-      getActionConfig(log.action).label.toLowerCase().includes(q)
-    );
+    if (search) {
+      const q = search.toLowerCase();
+      const matchesSearch =
+        log.actorName.toLowerCase().includes(q) ||
+        (log.actorEmail ?? "").toLowerCase().includes(q) ||
+        (log.targetName ?? "").toLowerCase().includes(q) ||
+        (log.targetSection ?? "").toLowerCase().includes(q) ||
+        log.description.toLowerCase().includes(q) ||
+        getActionConfig(log.action).label.toLowerCase().includes(q);
+      if (!matchesSearch) return false;
+    }
+    if (actorFilter) {
+      const a = actorFilter.toLowerCase();
+      const matchesActor =
+        log.actorName.toLowerCase().includes(a) ||
+        (log.actorEmail ?? "").toLowerCase().includes(a) ||
+        log.actorId.toLowerCase().includes(a);
+      if (!matchesActor) return false;
+    }
+    return true;
   });
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -327,6 +343,22 @@ export default function ActivityLogsPage() {
         .page-btn:disabled { opacity: 0.38; cursor: not-allowed; }
         .page-info { font-size: 12px; color: var(--text-secondary); padding: 0 6px; font-weight: 600; white-space: nowrap; }
 
+        /* ── Clickable rows ── */
+        .log-row-clickable { cursor: pointer; }
+
+        /* ── Diff table (detail modal) ── */
+        .log-diff-table { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; font-size: 12px; }
+        .log-diff-header { display: grid; grid-template-columns: 140px 1fr 1fr; background: var(--bg-elevated); border-bottom: 1px solid var(--border); padding: 6px 12px; gap: 12px; }
+        .log-diff-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text-muted); }
+        .log-diff-label--from { color: var(--red); }
+        .log-diff-label--to   { color: var(--green); }
+        .log-diff-row { display: grid; grid-template-columns: 140px 1fr 1fr; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--border-muted); }
+        .log-diff-row:last-child { border-bottom: none; }
+        .log-diff-row--single { grid-template-columns: 140px 1fr; }
+        .log-diff-key  { font-weight: 600; color: var(--text-secondary); font-family: monospace; word-break: break-all; }
+        .log-diff-from { color: var(--red);   background: var(--red-dim);   padding: 2px 6px; border-radius: 4px; font-family: monospace; word-break: break-all; white-space: pre-wrap; }
+        .log-diff-to   { color: var(--green); background: var(--green-dim); padding: 2px 6px; border-radius: 4px; font-family: monospace; word-break: break-all; white-space: pre-wrap; }
+
         /* ── Spinner ── */
         .spin-slow { animation: al-spin 1s linear infinite; }
         @keyframes al-spin { to { transform: rotate(360deg); } }
@@ -381,6 +413,20 @@ export default function ActivityLogsPage() {
       {/* ── Filter Panel ── */}
       {showFilters && (
         <div className="filters-panel">
+          <div className="filter-group">
+            <label className="filter-label">Actor</label>
+            <div style={{ position: "relative" }}>
+              <User size={12} style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)", pointerEvents: "none" }} />
+              <input
+                className="filter-date"
+                style={{ paddingLeft: 28 }}
+                placeholder="Name or email…"
+                value={actorFilter}
+                onChange={(e) => setActorFilter(e.target.value)}
+              />
+            </div>
+          </div>
+
           <div className="filter-group">
             <label className="filter-label">Module</label>
             <select
@@ -490,8 +536,10 @@ export default function ActivityLogsPage() {
                 return (
                   <tr
                     key={log.id}
-                    className="log-row-accent"
+                    className="log-row-accent log-row-clickable"
                     style={{ borderLeftColor: moduleCfg.accentColor }}
+                    onClick={() => setSelectedLog(log)}
+                    title="Click to view full details"
                   >
                     <td>
                       <div className="log-time">{formatDate(log.createdAt)}</div>
@@ -575,6 +623,135 @@ export default function ActivityLogsPage() {
           </div>
         )}
       </div>
+
+      {/* ── Row Detail Modal ── */}
+      <Modal
+        open={!!selectedLog}
+        onClose={() => setSelectedLog(null)}
+        title="Log Entry Detail"
+        size="lg"
+      >
+        {selectedLog && (() => {
+          const moduleCfg = getModuleConfig(selectedLog.module);
+          const actionCfg = getActionConfig(selectedLog.action);
+          const hasMeta   = selectedLog.meta && (
+            selectedLog.meta.from !== null ||
+            selectedLog.meta.to   !== null ||
+            (selectedLog.meta.other && Object.keys(selectedLog.meta.other).length > 0)
+          );
+
+          const renderValue = (v: unknown): string => {
+            if (v === null || v === undefined) return "—";
+            if (typeof v === "string")  return v || "—";
+            if (typeof v === "boolean") return v ? "true" : "false";
+            return JSON.stringify(v, null, 2);
+          };
+
+          const diffLines = (from: unknown, to: unknown): { key: string; from: string; to: string }[] => {
+            if (typeof from === "object" && from !== null && typeof to === "object" && to !== null) {
+              const keys = Array.from(new Set([...Object.keys(from as object), ...Object.keys(to as object)]));
+              return keys.map(k => ({
+                key: k,
+                from: renderValue((from as Record<string,unknown>)[k]),
+                to:   renderValue((to   as Record<string,unknown>)[k]),
+              })).filter(r => r.from !== r.to);
+            }
+            return [{ key: "", from: renderValue(from), to: renderValue(to) }];
+          };
+
+          const divider = <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "16px 0" }} />;
+          const sectionLabel = (text: string) => (
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: "0.7px", color: "var(--text-muted)", marginBottom: 6 }}>{text}</div>
+          );
+
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              {/* Header meta */}
+              <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 16 }}>
+                <div>
+                  {sectionLabel("Actor")}
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{selectedLog.actorName}</div>
+                  {selectedLog.actorEmail && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{selectedLog.actorEmail}</div>}
+                </div>
+                <div>
+                  {sectionLabel("Date")}
+                  <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{formatDate(selectedLog.createdAt)}</div>
+                </div>
+                <div>
+                  {sectionLabel("Action")}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {selectedLog.module && <Badge variant={moduleCfg.variant as any}>{moduleCfg.label}</Badge>}
+                    <Badge variant={actionCfg.variant as any}>{actionCfg.label}</Badge>
+                  </div>
+                </div>
+              </div>
+
+              {divider}
+
+              {/* Description */}
+              <div style={{ marginBottom: 16 }}>
+                {sectionLabel("Description")}
+                <div style={{ fontSize: 13, color: "var(--text-primary)", lineHeight: 1.6 }}>{selectedLog.description || "—"}</div>
+              </div>
+
+              {/* Target */}
+              {(selectedLog.targetName || selectedLog.targetId) && (
+                <>
+                  {divider}
+                  <div style={{ marginBottom: 16 }}>
+                    {sectionLabel("Target")}
+                    {selectedLog.targetName && <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{selectedLog.targetName}</div>}
+                    {selectedLog.targetSection && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{selectedLog.targetSection}</div>}
+                    {selectedLog.targetId && <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "monospace", marginTop: 2 }}>{selectedLog.targetId}</div>}
+                  </div>
+                </>
+              )}
+
+              {/* Meta diff */}
+              {hasMeta && (
+                <>
+                  {divider}
+                  {sectionLabel("Changes")}
+
+                  {selectedLog.meta!.from !== null && selectedLog.meta!.to !== null && (
+                    <div className="log-diff-table">
+                      <div className="log-diff-header">
+                        <span />
+                        <span className="log-diff-label log-diff-label--from">Before</span>
+                        <span className="log-diff-label log-diff-label--to">After</span>
+                      </div>
+                      {diffLines(selectedLog.meta!.from, selectedLog.meta!.to).map((row, i) => (
+                        <div key={i} className="log-diff-row">
+                          {row.key && <span className="log-diff-key">{row.key}</span>}
+                          {!row.key && <span />}
+                          <span className="log-diff-from">{row.from}</span>
+                          <span className="log-diff-to">{row.to}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {selectedLog.meta!.other && Object.keys(selectedLog.meta!.other).length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.7px", color: "var(--text-muted)", marginBottom: 8 }}>Extra</div>
+                      <div className="log-diff-table">
+                        {Object.entries(selectedLog.meta!.other).map(([k, v]) => (
+                          <div key={k} className="log-diff-row log-diff-row--single">
+                            <span className="log-diff-key">{k}</span>
+                            <span className="log-diff-to" style={{ gridColumn: "2 / 4" }}>{renderValue(v)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })()}
+      </Modal>
+
+
     </AdminLayout>
   );
 }
