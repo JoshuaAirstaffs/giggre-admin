@@ -394,7 +394,7 @@ export default function ActivityLogsPage() {
         </div>
 
         <div className="logs-toolbar-right">
-          <button
+          {/* <button
             className={`filter-btn${showFilters ? " active" : ""}`}
             onClick={() => setShowFilters((s) => !s)}
           >
@@ -403,7 +403,7 @@ export default function ActivityLogsPage() {
             {activeFilterCount > 0 && (
               <span className="filter-badge">{activeFilterCount}</span>
             )}
-          </button>
+          </button> */}
           <button className="refresh-btn" onClick={handleRefresh} disabled={refreshing}>
             <RefreshCw size={13} className={refreshing ? "spin-slow" : ""} />
           </button>
