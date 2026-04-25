@@ -11,7 +11,7 @@ import {
   doc,
   updateDoc,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, auth } from "@/lib/firebase";
 import {
   Briefcase,
   Search,
@@ -19,11 +19,11 @@ import {
   MapPin,
   Filter,
   SlidersHorizontal,
-  Eye,
   DollarSign,
   Users,
   Calendar,
   Tag,
+  Timer,
 } from "lucide-react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/context/AuthContext";
@@ -68,7 +68,7 @@ interface GigBase {
 
 type Gig = GigBase & Record<string, unknown>;
 
-type StatusFilter = "all" | "available" | "unavailable" | "cancelled" | "inactive";
+type StatusFilter = "all" | "completed" | "in_progress" | "cancelled" | "inactive" | "expired";
 type GigTypeFilter = "all" | GigType;
 type SortOption = "newest" | "oldest" | "pay-high" | "pay-low";
 
@@ -98,9 +98,6 @@ function formatDateShort(ts: Timestamp | null): string {
   return d.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function isAvailable(status: string): boolean {
-  return status?.toLowerCase() === "available";
-}
 
 function formatFieldLabel(key: string): string {
   return key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase()).trim();
@@ -143,6 +140,7 @@ function statusBadgeClass(status: string): string {
   if (s === "completed") return "lg-badge--completed";
   if (s === "cancelled") return "lg-badge--cancelled";
   if (s === "no_worker") return "lg-badge--inactive";
+  if (s === "expired") return "lg-badge--expired";
   return "lg-badge--unavailable";
 }
 
@@ -170,6 +168,9 @@ export default function LiveGigsPage() {
   const [sort, setSort] = useState<SortOption>("newest");
   const [page, setPage] = useState(1);
   const [inactiveDays, setInactiveDays] = useState("");
+  const [postedByFilter, setPostedByFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
 
   const [detailGig, setDetailGig] = useState<Gig | null>(null);
@@ -189,6 +190,10 @@ export default function LiveGigsPage() {
   const [cancelReason, setCancelReason] = useState("");
   const [cancelTicketID, setCancelTicketId] = useState("");
 
+  type ExpiryGig = { id: string; title: string; gigType: string; collection: string; expireAfterHours: number };
+  const [runningExpiry, setRunningExpiry] = useState(false);
+  const [expiryResult, setExpiryResult] = useState<{ expired: number; gigs: ExpiryGig[] } | null>(null);
+
   const openCancelModal = useCallback((gig: Gig) => {
     setCancelModalGig(gig);
     setCancelReason("");
@@ -202,7 +207,8 @@ export default function LiveGigsPage() {
       .filter((g): g is Gig =>
         !!g &&
         g.status?.toLowerCase() !== "cancelled" &&
-        g.status?.toLowerCase() !== "completed"
+        g.status?.toLowerCase() !== "completed" &&
+        g.status?.toLowerCase() !== "expired"
       );
   }, [selectedIds, gigs]);
 
@@ -356,6 +362,25 @@ export default function LiveGigsPage() {
     }
   }, [gigTypeFilter]);
 
+  const runAutoExpiry = useCallback(async () => {
+    setRunningExpiry(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch("/api/admin/run-expiry", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setExpiryResult(data);
+      if (data.expired > 0) fetchLiveGigs();
+    } catch {
+      setExpiryResult({ expired: -1, gigs: [] });
+    } finally {
+      setRunningExpiry(false);
+    }
+  }, [fetchLiveGigs]);
+
   useEffect(() => { fetchLiveGigs(); }, [fetchLiveGigs]);
 
   // ── Derived ──────────────────────────────────────────────────────────────────
@@ -365,17 +390,17 @@ export default function LiveGigsPage() {
     if (gigTypeFilter !== "all") {
       list = list.filter((g) => g.gigType === gigTypeFilter);
     }
-    if (statusFilter === "available") {
-      list = list.filter((g) => isAvailable(g.status));
-    } else if (statusFilter === "unavailable") {
-      list = list.filter(
-        (g) =>
-          !isAvailable(g.status) &&
-          g.status?.toLowerCase() !== "cancelled" &&
-          g.status?.toLowerCase() !== "no_worker"
-      );
+    if (statusFilter === "completed") {
+      list = list.filter((g) => g.status?.toLowerCase() === "completed");
+    } else if (statusFilter === "in_progress") {
+      list = list.filter((g) => {
+        const s = g.status?.toLowerCase();
+        return s !== "completed" && s !== "no_worker" && s !== "expired" && s !== "cancelled";
+      });
     } else if (statusFilter === "cancelled") {
       list = list.filter((g) => g.status?.toLowerCase() === "cancelled");
+    } else if (statusFilter === "expired") {
+      list = list.filter((g) => g.status?.toLowerCase() === "expired");
     } else if (statusFilter === "inactive") {
       const days = parseInt(inactiveDays, 10);
       const cutoff = !isNaN(days) && days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
@@ -385,6 +410,18 @@ export default function LiveGigsPage() {
         const created = g.createdAt ? g.createdAt.toDate().getTime() : null;
         return created !== null && created <= cutoff;
       });
+    }
+    if (postedByFilter) {
+      list = list.filter((g) => g.hostName === postedByFilter);
+    }
+    if (dateFrom) {
+      const from = new Date(dateFrom).getTime();
+      list = list.filter((g) => g.createdAt && g.createdAt.toDate().getTime() >= from);
+    }
+    if (dateTo) {
+      const to = new Date(dateTo);
+      to.setHours(23, 59, 59, 999);
+      list = list.filter((g) => g.createdAt && g.createdAt.toDate().getTime() <= to.getTime());
     }
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -406,30 +443,36 @@ export default function LiveGigsPage() {
       return 0;
     });
     return list;
-  }, [gigs, search, statusFilter, gigTypeFilter, sort, inactiveDays]);
+  }, [gigs, search, statusFilter, gigTypeFilter, sort, inactiveDays, postedByFilter, dateFrom, dateTo]);
 
   const stats = useMemo(() => {
     const total = gigs.length;
-    const available = gigs.filter((g) => isAvailable(g.status)).length;
+    const completed = gigs.filter((g) => g.status?.toLowerCase() === "completed").length;
     const noWorker = gigs.filter((g) => g.status?.toLowerCase() === "no_worker").length;
     const cancelled = gigs.filter((g) => g.status?.toLowerCase() === "cancelled").length;
-    const unavailable = total - available - noWorker - cancelled;
-    return { total, available, unavailable: Math.max(0, unavailable), noWorker, cancelled };
+    const expired = gigs.filter((g) => g.status?.toLowerCase() === "expired").length;
+    const inProgress = gigs.filter((g) => {
+      const s = g.status?.toLowerCase();
+      return s !== "completed" && s !== "no_worker" && s !== "expired" && s !== "cancelled";
+    }).length;
+    return { total, completed, inProgress: Math.max(0, inProgress), noWorker, cancelled, expired };
   }, [gigs]);
 
   const activeFilterCount = useMemo(() => {
     let count = 0;
     if (statusFilter !== "all") count++;
     if (gigTypeFilter !== "all") count++;
+    if (postedByFilter) count++;
+    if (dateFrom || dateTo) count++;
     return count;
-  }, [statusFilter, gigTypeFilter]);
+  }, [statusFilter, gigTypeFilter, postedByFilter, dateFrom, dateTo]);
 
-  const hasActiveFilter = !!(search || statusFilter !== "all" || gigTypeFilter !== "all" || inactiveDays);
+  const hasActiveFilter = !!(search || statusFilter !== "all" || gigTypeFilter !== "all" || inactiveDays || postedByFilter || dateFrom || dateTo);
 
   useEffect(() => {
     setPage(1);
     setSelectedIds(new Set());
-  }, [search, statusFilter, gigTypeFilter, sort, inactiveDays]);
+  }, [search, statusFilter, gigTypeFilter, sort, inactiveDays, postedByFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -448,6 +491,9 @@ export default function LiveGigsPage() {
     setStatusFilter("all");
     setGigTypeFilter("all");
     setInactiveDays("");
+    setPostedByFilter("");
+    setDateFrom("");
+    setDateTo("");
   };
 
   const exitSelectionMode = () => {
@@ -462,9 +508,14 @@ export default function LiveGigsPage() {
       title="Live Gigs"
       subtitle="Monitor and manage all active gig postings"
       actions={
-        <Button variant="ghost" size="sm" icon={RefreshCw} onClick={fetchLiveGigs} disabled={loading}>
-          Refresh
-        </Button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Button variant="ghost" size="sm" icon={Timer} onClick={runAutoExpiry} disabled={runningExpiry || loading}>
+            {runningExpiry ? "Running…" : "Run Auto-Expiry"}
+          </Button>
+          <Button variant="ghost" size="sm" icon={RefreshCw} onClick={fetchLiveGigs} disabled={loading}>
+            Refresh
+          </Button>
+        </div>
       }
     >
       <style>{`
@@ -555,10 +606,11 @@ export default function LiveGigsPage() {
         .lg-pill--active {
           background: var(--blue); border-color: var(--blue); color: white; font-weight: 600;
         }
-        .lg-pill--available.lg-pill--active { background: var(--green); border-color: var(--green); }
-        .lg-pill--unavailable.lg-pill--active { background: var(--red); border-color: var(--red); }
+        .lg-pill--completed.lg-pill--active { background: var(--green); border-color: var(--green); }
+        .lg-pill--in_progress.lg-pill--active { background: var(--blue); border-color: var(--blue); }
         .lg-pill--cancelled.lg-pill--active { background: rgba(239,68,68,0.8); border-color: var(--red); }
         .lg-pill--inactive.lg-pill--active { background: rgba(245,158,11,0.9); border-color: var(--amber); }
+        .lg-pill--expired.lg-pill--active { background: var(--red); border-color: var(--red); }
 
         /* ── Inactive days input ── */
         .lg-days-wrap { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
@@ -630,6 +682,13 @@ export default function LiveGigsPage() {
         /* ── Gig title cell ── */
         .lg-gig-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
         .lg-gig-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; display: flex; align-items: center; gap: 4px; }
+        .lg-user-btn {
+          background: none; border: none; padding: 2px 0; cursor: pointer;
+          font-size: 12px; font-family: inherit; color: var(--text-secondary);
+          text-align: left; transition: color 0.12s;
+        }
+        .lg-user-btn:hover { color: var(--blue); text-decoration: underline; }
+        .lg-user-btn--active { color: var(--blue); font-weight: 600; }
 
         /* ── Badges ── */
         .lg-badge {
@@ -645,6 +704,7 @@ export default function LiveGigsPage() {
         .lg-badge--pending { background: rgba(245,158,11,0.12); color: var(--amber); }
         .lg-badge--accepted { background: rgba(16,185,129,0.12); color: var(--green); }
         .lg-badge--rejected { background: rgba(239,68,68,0.12); color: var(--red); }
+        .lg-badge--expired { background: rgba(239,68,68,0.12); color: var(--red); }
         .lg-badge--type-offered { background: rgba(245,158,11,0.12); color: var(--amber); }
         .lg-badge--type-open { background: rgba(59,130,246,0.12); color: var(--blue); }
         .lg-badge--type-quick { background: rgba(139,92,246,0.12); color: var(--purple); }
@@ -759,14 +819,14 @@ export default function LiveGigsPage() {
             active={false}
           />
           <StatCard
-            value={stats.available} label="Available" color="var(--green)" loading={loading}
-            active={statusFilter === "available"}
-            onClick={() => setStatusFilter(statusFilter === "available" ? "all" : "available")}
+            value={stats.completed} label="Completed" color="var(--green)" loading={loading}
+            active={statusFilter === "completed"}
+            onClick={() => setStatusFilter(statusFilter === "completed" ? "all" : "completed")}
           />
           <StatCard
-            value={stats.unavailable} label="Unavailable" color="var(--red)" loading={loading}
-            active={statusFilter === "unavailable"}
-            onClick={() => setStatusFilter(statusFilter === "unavailable" ? "all" : "unavailable")}
+            value={stats.inProgress} label="In Progress" color="var(--blue)" loading={loading}
+            active={statusFilter === "in_progress"}
+            onClick={() => setStatusFilter(statusFilter === "in_progress" ? "all" : "in_progress")}
           />
           <StatCard
             value={stats.noWorker} label="No Worker" color="var(--amber)" loading={loading}
@@ -777,6 +837,11 @@ export default function LiveGigsPage() {
             value={stats.cancelled} label="Cancelled" color="var(--text-muted)" loading={loading}
             active={statusFilter === "cancelled"}
             onClick={() => setStatusFilter(statusFilter === "cancelled" ? "all" : "cancelled")}
+          />
+          <StatCard
+            value={stats.expired} label="Expired" color="var(--red)" loading={loading}
+            active={statusFilter === "expired"}
+            onClick={() => setStatusFilter(statusFilter === "expired" ? "all" : "expired")}
           />
         </div>
 
@@ -846,11 +911,12 @@ export default function LiveGigsPage() {
               <div style={{ flex: 1 }}>
                 <div className="lg-filter-pills">
                   {([
-                    { val: "all", label: "All" },
-                    { val: "available", label: "Available" },
-                    { val: "unavailable", label: "Unavailable" },
-                    { val: "cancelled", label: "Cancelled" },
-                    { val: "inactive", label: "No Worker" },
+                    { val: "all",           label: "All" },
+                    { val: "completed",     label: "Completed" },
+                    { val: "in_progress",   label: "In Progress" },
+                    { val: "cancelled",     label: "Cancelled" },
+                    { val: "expired",       label: "Expired" },
+                    { val: "inactive",      label: "No Worker" },
                   ] as { val: StatusFilter; label: string }[]).map(({ val, label }) => (
                     <button
                       key={val}
@@ -877,6 +943,34 @@ export default function LiveGigsPage() {
                     />
                     <span className="lg-days-label">days (blank = all)</span>
                   </div>
+                )}
+              </div>
+            </div>
+
+            <div className="lg-filter-row">
+              <span className="lg-filter-label">Date</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <input
+                  type="date"
+                  className="lg-days-input"
+                  style={{ width: 130 }}
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  title="From"
+                />
+                <span className="lg-days-label">to</span>
+                <input
+                  type="date"
+                  className="lg-days-input"
+                  style={{ width: 130 }}
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  title="To"
+                />
+                {(dateFrom || dateTo) && (
+                  <button className="lg-chips-clear" onClick={() => { setDateFrom(""); setDateTo(""); }}>
+                    Clear
+                  </button>
                 )}
               </div>
             </div>
@@ -912,6 +1006,18 @@ export default function LiveGigsPage() {
                   ? `No Worker${inactiveDays ? ` · ${inactiveDays}d+` : ""}`
                   : statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
                 <button className="lg-chip-x" onClick={() => { setStatusFilter("all"); setInactiveDays(""); }}>×</button>
+              </span>
+            )}
+            {postedByFilter && (
+              <span className="lg-chip">
+                User: {postedByFilter.length > 24 ? postedByFilter.slice(0, 24) + "…" : postedByFilter}
+                <button className="lg-chip-x" onClick={() => setPostedByFilter("")}>×</button>
+              </span>
+            )}
+            {(dateFrom || dateTo) && (
+              <span className="lg-chip">
+                {dateFrom && dateTo ? `${dateFrom} → ${dateTo}` : dateFrom ? `From ${dateFrom}` : `Until ${dateTo}`}
+                <button className="lg-chip-x" onClick={() => { setDateFrom(""); setDateTo(""); }}>×</button>
               </span>
             )}
             <button className="lg-chips-clear" onClick={clearFilters}>Clear all</button>
@@ -980,6 +1086,7 @@ export default function LiveGigsPage() {
                     </th>
                   )}
                   <th>Gig</th>
+                  <th>User</th>
                   <th>Type</th>
                   <th>Status</th>
                   <th>Applications</th>
@@ -991,10 +1098,12 @@ export default function LiveGigsPage() {
                 {paginated.map((gig) => {
                   const appCount = gig.applications?.length ?? 0;
                   const loc = formatLocation(gig.location);
+                  const s = gig.status?.toLowerCase();
+                  const isInProgress = s !== "completed" && s !== "no_worker" && s !== "expired" && s !== "cancelled";
                   return (
                     <tr
                       key={gig.id}
-                      className="lg-row"
+                      className={`lg-row${isInProgress ? " lg-row--in-progress" : ""}`}
                       onClick={() => setDetailGig(gig)}
                     >
                       {selectionMode && (
@@ -1015,11 +1124,20 @@ export default function LiveGigsPage() {
                       )}
                       <td>
                         <div className="lg-gig-title">{gig.title || "Untitled Gig"}</div>
-                        {loc ? (
-                          <div className="lg-gig-meta"><MapPin size={10} />{loc}</div>
-                        ) : gig.postedBy ? (
-                          <div className="lg-gig-meta">by {gig.postedBy}</div>
-                        ) : null}
+                        {loc && <div className="lg-gig-meta"><MapPin size={10} />{loc}</div>}
+                      </td>
+                      <td>
+                        {gig.hostName ? (
+                          <button
+                            className={`lg-user-btn${postedByFilter === gig.hostName ? " lg-user-btn--active" : ""}`}
+                            onClick={(e) => { e.stopPropagation(); setPostedByFilter(postedByFilter === gig.hostName ? "" : (gig.hostName as string)); }}
+                            title={postedByFilter === gig.hostName ? "Clear user filter" : `Filter by ${gig.hostName}`}
+                          >
+                            {gig.hostName as string}
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>—</span>
+                        )}
                       </td>
                       <td>
                         <span className={`lg-badge lg-badge--type-${gig.gigType}`}>
@@ -1031,6 +1149,11 @@ export default function LiveGigsPage() {
                           <span className="lg-badge-dot" />
                           {statusLabel(gig.status)}
                         </span>
+                        {gig.status?.toLowerCase() === "cancelled" && gig.cancelledByAdmin && (
+                          <div style={{ fontSize: 10, color: "var(--red)", fontWeight: 600, marginTop: 3, opacity: 0.8 }}>
+                            by admin
+                          </div>
+                        )}
                       </td>
                       <td>
                         <span className="lg-num">{appCount}</span>
@@ -1045,14 +1168,9 @@ export default function LiveGigsPage() {
                       </td>
                       <td onClick={(e) => e.stopPropagation()}>
                         <div className="lg-actions">
-                          <button
-                            className="lg-view-btn"
-                            onClick={() => setDetailGig(gig)}
-                          >
-                            <Eye size={11} /> View
-                          </button>
                           {gig.status?.toLowerCase() !== "cancelled" &&
-                            gig.status?.toLowerCase() !== "completed" && (
+                            gig.status?.toLowerCase() !== "completed" &&
+                            gig.status?.toLowerCase() !== "expired" && (
                             <button
                               className="lg-cancel-btn"
                               disabled={cancellingId === gig.id}
@@ -1179,6 +1297,52 @@ export default function LiveGigsPage() {
           {cancelError && <div className="cgm-error">{cancelError}</div>}
         </Modal>
       )}
+
+      {/* ── Auto-Expiry Result Modal ── */}
+      {expiryResult && (
+        <Modal
+          open
+          onClose={() => setExpiryResult(null)}
+          title="Auto-Expiry Results"
+          size="md"
+          footer={
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+              <Button variant="ghost" size="sm" icon={RefreshCw} onClick={() => { fetchLiveGigs(); setExpiryResult(null); }}>
+                Go to Live Gigs
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setExpiryResult(null)}>Close</Button>
+            </div>
+          }
+        >
+          {expiryResult.expired === -1 ? (
+            <div style={{ fontSize: 13, color: "var(--red)" }}>Failed to run auto-expiry. Please try again.</div>
+          ) : expiryResult.expired === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+              No gigs were eligible for expiry based on the current configuration.
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 14 }}>
+                <strong style={{ color: "var(--text-primary)" }}>{expiryResult.expired}</strong> gig{expiryResult.expired !== 1 ? "s" : ""} were marked as expired.
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {expiryResult.gigs.map((g) => (
+                  <div key={g.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "var(--bg-elevated)", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{g.title}</div>
+                      <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>ID: {g.id}</div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                      <span className={`lg-badge lg-badge--type-${g.gigType}`}>{g.gigType}</span>
+                      <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{g.expireAfterHours}h threshold</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
     </AdminLayout>
   );
 }
@@ -1221,7 +1385,8 @@ function GigDetailModal({
 }) {
   const isCancelled = gig.status?.toLowerCase() === "cancelled";
   const isCompleted = gig.status?.toLowerCase() === "completed";
-  const canCancel = !isCancelled && !isCompleted;
+  const isExpired   = gig.status?.toLowerCase() === "expired";
+  const canCancel   = !isCancelled && !isCompleted && !isExpired;
 
   const accepted = gig.applications?.filter((a) => a.status === "accepted").length ?? 0;
   const pending  = gig.applications?.filter((a) => a.status === "pending").length ?? 0;

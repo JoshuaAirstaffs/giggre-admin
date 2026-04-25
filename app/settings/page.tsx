@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Calendar,
   MessageSquare,
+  Timer,
 } from "lucide-react";
 
 // ─── Firestore doc refs ───────────────────────────────────────────────────────
@@ -24,6 +25,7 @@ const DOCS = {
   maintenance:        doc(db, "general_config", "maintenance"),
   platformCommission: doc(db, "general_config", "platform_commission_rules"),
   gigVisibility:      doc(db, "general_config", "gig_visibility_rules"),
+  gigExpiry:          doc(db, "general_config", "gigExpiry"),
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -43,6 +45,12 @@ interface CommissionConfig {
   processingFee: number;
   cancellationPenalty: number;
   minBudgetPerGig: number;
+}
+
+interface GigExpiryConfig {
+  open_gigs: number;
+  quick_gigs: number;
+  offered_gigs: number;
 }
 
 interface VisibilityConfig {
@@ -71,6 +79,12 @@ const D_COMM: CommissionConfig = {
   processingFee: 2.5,
   cancellationPenalty: 50,
   minBudgetPerGig: 100,
+};
+
+const D_EXPIRY: GigExpiryConfig = {
+  open_gigs: 480,
+  quick_gigs: 480,
+  offered_gigs: 480,
 };
 
 const D_VIS: VisibilityConfig = {
@@ -208,23 +222,27 @@ export default function SettingsPage() {
   const [maint,   setMaint]   = useState<MaintenanceConfig>(D_MAINT);
   const [comm,    setComm]    = useState<CommissionConfig>(D_COMM);
   const [vis,     setVis]     = useState<VisibilityConfig>(D_VIS);
+  const [expiry,  setExpiry]  = useState<GigExpiryConfig>(D_EXPIRY);
   // Saving states
-  const [savingMaint, setSavingMaint] = useState(false);
-  const [savingComm,  setSavingComm]  = useState(false);
-  const [savingVis,   setSavingVis]   = useState(false);
+  const [savingMaint,  setSavingMaint]  = useState(false);
+  const [savingComm,   setSavingComm]   = useState(false);
+  const [savingVis,    setSavingVis]    = useState(false);
+  const [savingExpiry, setSavingExpiry] = useState(false);
 
   // ── Load all sections in parallel ───────────────────────────────────────────
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [mSnap, cSnap, vSnap] = await Promise.all([
+      const [mSnap, cSnap, vSnap, eSnap] = await Promise.all([
         getDoc(DOCS.maintenance),
         getDoc(DOCS.platformCommission),
         getDoc(DOCS.gigVisibility),
+        getDoc(DOCS.gigExpiry),
       ]);
-      if (mSnap.exists()) setMaint({ ...D_MAINT, ...mSnap.data() as Partial<MaintenanceConfig> });
-      if (cSnap.exists()) setComm({ ...D_COMM,  ...cSnap.data() as Partial<CommissionConfig>  });
-      if (vSnap.exists()) setVis({ ...D_VIS,   ...vSnap.data() as Partial<VisibilityConfig>  });
+      if (mSnap.exists()) setMaint({ ...D_MAINT,  ...mSnap.data() as Partial<MaintenanceConfig>  });
+      if (cSnap.exists()) setComm({ ...D_COMM,   ...cSnap.data() as Partial<CommissionConfig>   });
+      if (vSnap.exists()) setVis({ ...D_VIS,    ...vSnap.data() as Partial<VisibilityConfig>   });
+      if (eSnap.exists()) setExpiry({ ...D_EXPIRY, ...eSnap.data() as Partial<GigExpiryConfig> });
     } catch {
       toast.error("Failed to load settings");
     } finally {
@@ -374,6 +392,20 @@ export default function SettingsPage() {
               <SaveBtn onClick={() => save(DOCS.gigVisibility, vis, "Gig Visibility Rules", setSavingVis)} saving={savingVis} />
             </SectionCard>
           </div>
+
+          {/* ── 4. Gig Expiry ───────────────────────────────────────────────── */}
+          <SectionCard icon={<Timer size={15} />} title="Gig Auto-Expiry" accent="var(--purple, #a855f7)">
+            <FieldRow label="Open Gigs" sub="Hours before an open gig is auto-expired">
+              <NumberInput value={expiry.open_gigs} onChange={(v) => setExpiry((p) => ({ ...p, open_gigs: v }))} min={1} suffix="hrs" />
+            </FieldRow>
+            <FieldRow label="Quick Gigs" sub="Hours before a quick gig is auto-expired">
+              <NumberInput value={expiry.quick_gigs} onChange={(v) => setExpiry((p) => ({ ...p, quick_gigs: v }))} min={1} suffix="hrs" />
+            </FieldRow>
+            <FieldRow label="Offered Gigs" sub="Hours before an offered gig is auto-expired" last>
+              <NumberInput value={expiry.offered_gigs} onChange={(v) => setExpiry((p) => ({ ...p, offered_gigs: v }))} min={1} suffix="hrs" />
+            </FieldRow>
+            <SaveBtn onClick={() => save(DOCS.gigExpiry, expiry, "Gig Auto-Expiry", setSavingExpiry)} saving={savingExpiry} />
+          </SectionCard>
 
         </div>
       )}
