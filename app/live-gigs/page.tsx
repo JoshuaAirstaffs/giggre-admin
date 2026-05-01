@@ -1383,6 +1383,7 @@ function GigDetailModal({
   onCancel: () => void;
   onClose: () => void;
 }) {
+  const { symbol } = useCurrency();
   const isCancelled = gig.status?.toLowerCase() === "cancelled";
   const isCompleted = gig.status?.toLowerCase() === "completed";
   const isExpired   = gig.status?.toLowerCase() === "expired";
