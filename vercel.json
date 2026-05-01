@@ -3,6 +3,10 @@
     {
       "path": "/api/expire-gigs",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/delete-scheduled-users",
+      "schedule": "0 1 * * *"
     }
   ]
 }

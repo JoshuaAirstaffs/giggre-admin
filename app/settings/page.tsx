@@ -17,7 +17,9 @@ import {
   Calendar,
   MessageSquare,
   Timer,
+  DollarSign,
 } from "lucide-react";
+import { useCurrency, type CurrencySymbol } from "@/context/CurrencyContext";
 
 // ─── Firestore doc refs ───────────────────────────────────────────────────────
 
@@ -26,6 +28,7 @@ const DOCS = {
   platformCommission: doc(db, "general_config", "platform_commission_rules"),
   gigVisibility:      doc(db, "general_config", "gig_visibility_rules"),
   gigExpiry:          doc(db, "general_config", "gigExpiry"),
+  currency:           doc(db, "general_config", "currency"),
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -52,6 +55,11 @@ interface GigExpiryConfig {
   quick_gigs: number;
   offered_gigs: number;
 }
+
+interface CurrencyConfig {
+  symbol: CurrencySymbol;
+}
+
 
 interface VisibilityConfig {
   autoHideEnabled: boolean;
@@ -86,6 +94,8 @@ const D_EXPIRY: GigExpiryConfig = {
   quick_gigs: 480,
   offered_gigs: 480,
 };
+
+const D_CURR: CurrencyConfig = { symbol: "₱" };
 
 const D_VIS: VisibilityConfig = {
   autoHideEnabled: false,
@@ -215,6 +225,7 @@ function SaveBtn({ onClick, saving }: { onClick: () => void; saving: boolean }) 
 export default function SettingsPage() {
   const { user } = useAuthGuard({ module: "settings" });
   const isSuperAdmin = user?.role === "super_admin";
+  const { setSymbol: setGlobalSymbol } = useCurrency();
 
   const [loading, setLoading] = useState(true);
 
@@ -223,32 +234,40 @@ export default function SettingsPage() {
   const [comm,    setComm]    = useState<CommissionConfig>(D_COMM);
   const [vis,     setVis]     = useState<VisibilityConfig>(D_VIS);
   const [expiry,  setExpiry]  = useState<GigExpiryConfig>(D_EXPIRY);
+  const [curr,    setCurr]    = useState<CurrencyConfig>(D_CURR);
   // Saving states
   const [savingMaint,  setSavingMaint]  = useState(false);
   const [savingComm,   setSavingComm]   = useState(false);
   const [savingVis,    setSavingVis]    = useState(false);
   const [savingExpiry, setSavingExpiry] = useState(false);
+  const [savingCurr,   setSavingCurr]   = useState(false);
 
   // ── Load all sections in parallel ───────────────────────────────────────────
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [mSnap, cSnap, vSnap, eSnap] = await Promise.all([
+      const [mSnap, cSnap, vSnap, eSnap, currSnap] = await Promise.all([
         getDoc(DOCS.maintenance),
         getDoc(DOCS.platformCommission),
         getDoc(DOCS.gigVisibility),
         getDoc(DOCS.gigExpiry),
+        getDoc(DOCS.currency),
       ]);
       if (mSnap.exists()) setMaint({ ...D_MAINT,  ...mSnap.data() as Partial<MaintenanceConfig>  });
       if (cSnap.exists()) setComm({ ...D_COMM,   ...cSnap.data() as Partial<CommissionConfig>   });
       if (vSnap.exists()) setVis({ ...D_VIS,    ...vSnap.data() as Partial<VisibilityConfig>   });
       if (eSnap.exists()) setExpiry({ ...D_EXPIRY, ...eSnap.data() as Partial<GigExpiryConfig> });
+      if (currSnap.exists()) {
+        const loaded = { ...D_CURR, ...currSnap.data() as Partial<CurrencyConfig> };
+        setCurr(loaded);
+        setGlobalSymbol(loaded.symbol);
+      }
     } catch {
       toast.error("Failed to load settings");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setGlobalSymbol]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -351,16 +370,16 @@ export default function SettingsPage() {
                 <NumberInput value={comm.quickGig} onChange={(v) => setComm((p) => ({ ...p, quickGig: v }))} min={0} max={100} suffix="%" />
               </FieldRow>
               <FieldRow label="Min. Payout" sub="Minimum withdrawal amount">
-                <NumberInput value={comm.minPayoutThreshold} onChange={(v) => setComm((p) => ({ ...p, minPayoutThreshold: v }))} min={0} suffix="$" />
+                <NumberInput value={comm.minPayoutThreshold} onChange={(v) => setComm((p) => ({ ...p, minPayoutThreshold: v }))} min={0} suffix={curr.symbol} />
               </FieldRow>
               <FieldRow label="Processing Fee" sub="Flat fee per transaction">
                 <NumberInput value={comm.processingFee} onChange={(v) => setComm((p) => ({ ...p, processingFee: v }))} min={0} suffix="%" />
               </FieldRow>
               <FieldRow label="Cancellation Penalty" sub="Fixed fee charged when a gig is cancelled">
-                <NumberInput value={comm.cancellationPenalty} onChange={(v) => setComm((p) => ({ ...p, cancellationPenalty: v }))} min={0} suffix="$" />
+                <NumberInput value={comm.cancellationPenalty} onChange={(v) => setComm((p) => ({ ...p, cancellationPenalty: v }))} min={0} suffix={curr.symbol} />
               </FieldRow>
               <FieldRow label="Minimum Budget per Gig" sub="Lowest allowed budget when posting a gig" last>
-                <NumberInput value={comm.minBudgetPerGig} onChange={(v) => setComm((p) => ({ ...p, minBudgetPerGig: v }))} min={0} suffix="$" />
+                <NumberInput value={comm.minBudgetPerGig} onChange={(v) => setComm((p) => ({ ...p, minBudgetPerGig: v }))} min={0} suffix={curr.symbol} />
               </FieldRow>
               <SaveBtn onClick={() => save(DOCS.platformCommission, comm, "Platform Commission Rules", setSavingComm)} saving={savingComm} />
             </SectionCard>
@@ -405,6 +424,35 @@ export default function SettingsPage() {
               <NumberInput value={expiry.offered_gigs} onChange={(v) => setExpiry((p) => ({ ...p, offered_gigs: v }))} min={1} suffix="hrs" />
             </FieldRow>
             <SaveBtn onClick={() => save(DOCS.gigExpiry, expiry, "Gig Auto-Expiry", setSavingExpiry)} saving={savingExpiry} />
+          </SectionCard>
+
+          {/* ── 5. Currency ─────────────────────────────────────────────────── */}
+          <SectionCard icon={<DollarSign size={15} />} title="Currency" accent="var(--green)">
+            <FieldRow label="Display Currency" sub="Symbol shown across gig salaries and amounts" last>
+              <div style={{ display: "flex", gap: 8 }}>
+                {([["₱", "Philippine Peso (₱)"], ["$", "US Dollar ($)"]] as [CurrencySymbol, string][]).map(([sym, label]) => (
+                  <button
+                    key={sym}
+                    type="button"
+                    onClick={() => setCurr({ symbol: sym })}
+                    style={{
+                      padding: "6px 14px", border: "1px solid",
+                      borderColor: curr.symbol === sym ? "var(--green)" : "var(--border)",
+                      borderRadius: "var(--radius-sm)", background: curr.symbol === sym ? "rgba(16,185,129,0.1)" : "var(--bg-elevated)",
+                      color: curr.symbol === sym ? "var(--green)" : "var(--text-secondary)",
+                      fontSize: 13, fontWeight: curr.symbol === sym ? 700 : 500,
+                      fontFamily: "inherit", cursor: "pointer", transition: "all 0.15s",
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </FieldRow>
+            <SaveBtn
+              onClick={() => save(DOCS.currency, curr, "Currency", setSavingCurr).then(() => setGlobalSymbol(curr.symbol))}
+              saving={savingCurr}
+            />
           </SectionCard>
 
         </div>

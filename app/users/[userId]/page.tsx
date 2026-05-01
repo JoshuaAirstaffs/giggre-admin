@@ -5,13 +5,15 @@ import { useParams, useRouter } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
-import Modal from "@/components/ui/Modal";
+import Modal, { ConfirmDialog } from "@/components/ui/Modal";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import {
   doc,
   onSnapshot,
   collection,
   getDocs,
+  getDoc,
+  deleteDoc,
   query,
   where,
   updateDoc,
@@ -23,8 +25,10 @@ import { db } from "@/lib/firebase";
 import { writeLog, buildDescription } from "@/lib/activitylog";
 import {
   ArrowLeft, User, MapPin, Star, Briefcase,
-  Clock, Shield, Wrench, Plus, Trash2, ChevronLeft, CheckCircle,
+  Clock, Shield, Wrench, Plus, Trash2, ChevronLeft, ChevronRight, CheckCircle,
+  Copy, Check, Ban, ShieldOff, ShieldCheck, AlertTriangle, History,
 } from "lucide-react";
+import { useCurrency } from "@/context/CurrencyContext";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -55,9 +59,11 @@ interface UserDoc {
   slot: number;
   // Location
   location: GeoPoint | null;
+  lastOnline: Timestamp | null;
   // Status
   suspended_until: Timestamp | null;
   isBanned: boolean;
+  ban_reason: string | null;
   // Skills (legacy array)
   skills: string[];
   // Skills XP object
@@ -89,9 +95,13 @@ interface WorkedGig {
   title: string;
   status: string;
   salary?: string | number;
-  category?: string;
   createdAt: Timestamp | null;
   hostId?: string;
+  hostName?: string;
+  assignedWorkerId?: string;
+  assignedWorkerName?: string;
+  workerRating?: number;
+  hostRating?: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -104,9 +114,10 @@ function formatDate(ts: Timestamp | null): string {
   });
 }
 
-function formatBalance(n: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD", minimumFractionDigits: 2,
+function formatBalance(n: number, symbol: string): string {
+  return symbol + new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(n ?? 0);
 }
 
@@ -118,6 +129,21 @@ function formatLocation(loc: GeoPoint | null): string {
 function formatRating(n: number): string {
   if (!n && n !== 0) return "N/A";
   return n.toFixed(1);
+}
+
+function formatRelativeTime(ts: Timestamp | null): string {
+  if (!ts) return "Never";
+  const diff = Date.now() - ts.toDate().getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w ago`;
+  return ts.toDate().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function isCurrentlySuspended(user: UserDoc): boolean {
@@ -152,6 +178,8 @@ function toUserDoc(id: string, d: Record<string, any>): UserDoc {
     location:          d.location instanceof GeoPoint ? d.location : null,
     suspended_until:   d.suspended_until instanceof Timestamp ? d.suspended_until : null,
     isBanned:          d.isBanned          ?? false,
+    lastOnline: d.lastOnline instanceof Timestamp ? d.lastOnline : null,
+    ban_reason:        typeof d.ban_reason === "string" ? d.ban_reason : null,
     skills:            Array.isArray(d.skills)   ? d.skills   : [],
     skillsXP:          d.skillsXP && typeof d.skillsXP === "object" ? d.skillsXP : {},
     hostRewardSkills:  Array.isArray(d.hostRewardSkills) ? d.hostRewardSkills : [],
@@ -619,6 +647,167 @@ function HostRewardSkillsModal({ open, onClose, user, availableSkills, onSave, s
   );
 }
 
+// ─── Suspension helpers ───────────────────────────────────────────────────────
+
+interface SuspensionHistoryEntry {
+  id: string;
+  action: string;
+  description: string;
+  actorName: string;
+  createdAt: Timestamp | null;
+  meta: {
+    other?: {
+      duration_minutes?: number;
+      tier?: string;
+      reason?: string;
+    };
+  } | null;
+}
+
+interface SuspensionTier {
+  decline_count_trigger: number;
+  suspension_duration_minutes: number;
+  tier_label?: string;
+  is_active: boolean;
+}
+
+function getApplicableTier(declineCount: number, tiers: SuspensionTier[]): SuspensionTier | null {
+  const active = tiers.filter((t) => t.is_active && declineCount >= t.decline_count_trigger);
+  if (active.length === 0) return null;
+  return active.reduce((prev, curr) =>
+    curr.decline_count_trigger > prev.decline_count_trigger ? curr : prev
+  );
+}
+
+type ConfirmAction = "ban" | "unban" | "lift" | "delete" | null;
+
+// ─── Suspend Modal ────────────────────────────────────────────────────────────
+
+function SuspendModal({
+  open, onClose, user, tiers, onConfirm, loading,
+}: {
+  open: boolean;
+  onClose: () => void;
+  user: UserDoc | null;
+  tiers: SuspensionTier[];
+  onConfirm: (minutes: number, label: string) => void;
+  loading: boolean;
+}) {
+  const activeTiers = [...tiers].sort((a, b) => a.decline_count_trigger - b.decline_count_trigger);
+  const [selected, setSelected] = useState<number | "custom">("custom");
+  const [customMin, setCustomMin] = useState(60);
+
+  useEffect(() => {
+    if (!open || !user) return;
+    let best = -1;
+    activeTiers.forEach((t, i) => {
+      if (user.decline_count >= t.decline_count_trigger) best = i;
+    });
+    setSelected(best >= 0 ? best : "custom");
+    setCustomMin(60);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const selectedMinutes =
+    selected === "custom"
+      ? customMin
+      : (activeTiers[selected as number]?.suspension_duration_minutes ?? 0);
+
+  const selectedLabel =
+    selected === "custom"
+      ? "Custom"
+      : (activeTiers[selected as number]?.tier_label || `Tier ${(selected as number) + 1}`);
+
+  if (!user) return null;
+
+  return (
+    <Modal
+      open={open}
+      onClose={loading ? () => {} : onClose}
+      title="Suspend User"
+      description={`${user.name} · ${user.decline_count} decline${user.decline_count !== 1 ? "s" : ""}`}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={loading}>Cancel</Button>
+          <Button
+            variant="primary" size="sm"
+            loading={loading}
+            disabled={selected === "custom" ? customMin < 1 : false}
+            onClick={() => onConfirm(selectedMinutes, selectedLabel)}
+          >
+            Suspend
+          </Button>
+        </>
+      }
+    >
+      <style>{`
+        .sus-tier { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elevated); cursor: pointer; transition: all 0.15s; margin-bottom: 6px; }
+        .sus-tier:hover { border-color: var(--blue); }
+        .sus-tier.active { border-color: var(--blue); background: var(--blue-dim); }
+        .sus-tier-radio { width: 15px; height: 15px; border-radius: 50%; border: 2px solid var(--border); flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
+        .sus-tier.active .sus-tier-radio { border-color: var(--blue); }
+        .sus-tier.active .sus-tier-radio::after { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--blue); display: block; }
+        .sus-tier-label { flex: 1; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+        .sus-tier-meta { font-size: 11px; color: var(--text-muted); }
+        .sus-tier-trigger { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 20px; background: rgba(249,115,22,0.12); color: var(--orange,#f97316); white-space: nowrap; }
+        .sus-divider { border: none; border-top: 1px solid var(--border-muted); margin: 10px 0; }
+        .sus-custom-row { display: flex; align-items: center; gap: 10px; }
+        .sus-custom-input { width: 80px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 13px; font-family: inherit; text-align: center; }
+        .sus-custom-input:focus { outline: none; border-color: var(--blue); }
+        .sus-section-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-muted); margin-bottom: 8px; }
+      `}</style>
+
+      {activeTiers.length > 0 && (
+        <>
+          <div className="sus-section-label">Suspension Tiers</div>
+          {activeTiers.map((tier, i) => (
+            <div
+              key={i}
+              className={`sus-tier${selected === i ? " active" : ""}`}
+              onClick={() => setSelected(i)}
+            >
+              <div className="sus-tier-radio" />
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span className="sus-tier-label">{tier.tier_label || `Tier ${i + 1}`}</span>
+                  <span className="sus-tier-trigger">≥ {tier.decline_count_trigger} declines</span>
+                </div>
+                <div className="sus-tier-meta">{tier.suspension_duration_minutes} minutes suspension</div>
+              </div>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)" }}>
+                {tier.suspension_duration_minutes}m
+              </span>
+            </div>
+          ))}
+          <div className="sus-divider" />
+        </>
+      )}
+
+      <div className="sus-section-label">Custom Duration</div>
+      <div
+        className={`sus-tier${selected === "custom" ? " active" : ""}`}
+        onClick={() => setSelected("custom")}
+      >
+        <div className="sus-tier-radio" />
+        <span className="sus-tier-label">Custom</span>
+        {selected === "custom" && (
+          <div className="sus-custom-row" onClick={(e) => e.stopPropagation()}>
+            <input
+              type="number"
+              className="sus-custom-input"
+              value={customMin}
+              min={1}
+              onChange={(e) => setCustomMin(Math.max(1, Number(e.target.value)))}
+            />
+            <span className="sus-tier-meta">minutes</span>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function UserProfilePage() {
@@ -626,6 +815,7 @@ export default function UserProfilePage() {
   const params = useParams();
   const router = useRouter();
   const userId = params.userId as string;
+  const { symbol } = useCurrency();
 
   const [userData, setUserData]         = useState<UserDoc | null>(null);
   const [loading, setLoading]           = useState(true);
@@ -636,8 +826,27 @@ export default function UserProfilePage() {
   const [savingHostRewardSkills, setSavingHostRewardSkills] = useState(false);
   const [postedGigs, setPostedGigs]      = useState<WorkedGig[]>([]);
   const [postedGigsLoading, setPostedGigsLoading] = useState(false);
+  const [postedGigsPage, setPostedGigsPage] = useState(1);
   const [workedGigs, setWorkedGigs]      = useState<WorkedGig[]>([]);
   const [workedGigsLoading, setWorkedGigsLoading] = useState(false);
+  const [workedGigsPage, setWorkedGigsPage] = useState(1);
+  const [copiedKey, setCopiedKey]            = useState<string | null>(null);
+  const [suspensionTiers, setSuspensionTiers]   = useState<SuspensionTier[]>([]);
+  const [actionLoading, setActionLoading]       = useState<string | null>(null);
+  const [confirmAction, setConfirmAction]       = useState<ConfirmAction>(null);
+  const [banReason, setBanReason]               = useState("");
+  const [suspendModalOpen, setSuspendModalOpen] = useState(false);
+  const [suspensionHistory, setSuspensionHistory]   = useState<SuspensionHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading]         = useState(false);
+
+  const GIGS_PAGE_SIZE = 10;
+
+  const handleCopy = useCallback((key: string, text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((k) => (k === key ? null : k)), 1500);
+    });
+  }, []);
 
   // ── Real-time user listener ───────────────────────────────────────────────
   useEffect(() => {
@@ -680,9 +889,11 @@ export default function UserProfilePage() {
             title: data.title ?? "Untitled",
             status: data.status ?? "unknown",
             salary: data.salary,
-            category: data.category,
             createdAt: data.createdAt instanceof Timestamp ? data.createdAt : null,
             hostId: data.hostId,
+            assignedWorkerId: data.assignedWorkerId ?? undefined,
+            assignedWorkerName: data.assignedWorkerName ?? undefined,
+            hostRating: typeof data.hostRating === "number" ? data.hostRating : undefined,
           } satisfies WorkedGig;
         })
       );
@@ -714,9 +925,10 @@ export default function UserProfilePage() {
             title: data.title ?? "Untitled",
             status: data.status ?? "unknown",
             salary: data.salary,
-            category: data.category,
             createdAt: data.createdAt instanceof Timestamp ? data.createdAt : null,
             hostId: data.hostId,
+            hostName: data.hostName ?? undefined,
+            workerRating: typeof data.workerRating === "number" ? data.workerRating : undefined,
           } satisfies WorkedGig;
         })
       );
@@ -730,6 +942,52 @@ export default function UserProfilePage() {
       console.error("[UserProfile] fetchWorkedGigs error:", err);
     }).finally(() => {
       setWorkedGigsLoading(false);
+    });
+  }, [userId]);
+
+  // ── Suspension tier config ────────────────────────────────────────────────
+  useEffect(() => {
+    getDoc(doc(db, "quick_gig_config", "decline_suspension")).then((snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        const tiers: SuspensionTier[] = Array.isArray(data.suspension_tier_table)
+          ? data.suspension_tier_table
+          : [];
+        setSuspensionTiers(tiers);
+      }
+    }).catch((err) => console.warn("[UserProfile] Failed to load suspension config:", err));
+  }, []);
+
+  // ── Suspension & ban history ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!userId) return;
+    setHistoryLoading(true);
+    const MODERATION_ACTIONS = new Set(["user_suspended", "user_unsuspended", "user_banned", "user_unbanned"]);
+    getDocs(
+      query(
+        collection(db, "activityLogs"),
+        where("targetId", "==", userId)
+      )
+    ).then((snap) => {
+      const entries: SuspensionHistoryEntry[] = snap.docs
+        .filter((d) => MODERATION_ACTIONS.has(d.data().action))
+        .map((d) => {
+          const data = d.data() as Record<string, any>;
+          return {
+            id: d.id,
+            action: data.action ?? "",
+            description: data.description ?? "",
+            actorName: data.actorName ?? "Unknown",
+            createdAt: data.createdAt instanceof Timestamp ? data.createdAt : null,
+            meta: data.meta ?? null,
+          };
+        })
+        .sort((a, b) => (b.createdAt?.toMillis() ?? 0) - (a.createdAt?.toMillis() ?? 0));
+      setSuspensionHistory(entries);
+    }).catch((err) => {
+      console.error("[UserProfile] suspension history error:", err);
+    }).finally(() => {
+      setHistoryLoading(false);
     });
   }, [userId]);
 
@@ -808,6 +1066,154 @@ export default function UserProfilePage() {
       setSavingHostRewardSkills(false);
     }
   }, [userData, adminUser]);
+
+  // ── Moderation actions ────────────────────────────────────────────────────
+
+  const handleSuspend = useCallback(async (durationMinutes: number, tierLabel: string) => {
+    if (!userData || !adminUser) return;
+    setActionLoading("suspend");
+    try {
+      const suspendedUntil = Timestamp.fromDate(new Date(Date.now() + durationMinutes * 60 * 1000));
+      await updateDoc(doc(db, "users", userData.id), {
+        suspended_until: suspendedUntil,
+        updatedAt: serverTimestamp(),
+      });
+      await writeLog({
+        actorId: adminUser.uid,
+        actorName: adminUser.displayName ?? "Unknown",
+        actorEmail: adminUser.email ?? "",
+        module: "user_management",
+        action: "user_suspended",
+        description: buildDescription.userSuspended(userData.name, durationMinutes),
+        targetId: userData.id,
+        targetName: userData.name,
+        affectedFiles: [`users/${userData.id}`],
+        meta: { other: { duration_minutes: durationMinutes, tier: tierLabel } },
+      });
+      setSuspendModalOpen(false);
+    } catch (err) {
+      console.error("[UserProfile] suspend error:", err);
+    } finally {
+      setActionLoading(null);
+    }
+  }, [userData, adminUser]);
+
+  const handleLiftSuspension = useCallback(async () => {
+    if (!userData || !adminUser) return;
+    setActionLoading("lift");
+    try {
+      await updateDoc(doc(db, "users", userData.id), {
+        suspended_until: null,
+        updatedAt: serverTimestamp(),
+      });
+      await writeLog({
+        actorId: adminUser.uid,
+        actorName: adminUser.displayName ?? "Unknown",
+        actorEmail: adminUser.email ?? "",
+        module: "user_management",
+        action: "user_unsuspended",
+        description: buildDescription.userUnsuspended(userData.name),
+        targetId: userData.id,
+        targetName: userData.name,
+        affectedFiles: [`users/${userData.id}`],
+      });
+      setConfirmAction(null);
+    } catch (err) {
+      console.error("[UserProfile] lift suspension error:", err);
+    } finally {
+      setActionLoading(null);
+    }
+  }, [userData, adminUser]);
+
+  const handleBan = useCallback(async () => {
+    if (!userData || !adminUser) return;
+    setActionLoading("ban");
+    try {
+      await updateDoc(doc(db, "users", userData.id), {
+        isBanned: true,
+        ban_reason: banReason.trim() || null,
+        suspended_until: null,
+        updatedAt: serverTimestamp(),
+      });
+      await writeLog({
+        actorId: adminUser.uid,
+        actorName: adminUser.displayName ?? "Unknown",
+        actorEmail: adminUser.email ?? "",
+        module: "user_management",
+        action: "user_banned",
+        description: buildDescription.userBanned(userData.name),
+        targetId: userData.id,
+        targetName: userData.name,
+        affectedFiles: [`users/${userData.id}`],
+        meta: banReason.trim() ? { other: { reason: banReason.trim() } } : undefined,
+      });
+      setConfirmAction(null);
+      setBanReason("");
+    } catch (err) {
+      console.error("[UserProfile] ban error:", err);
+    } finally {
+      setActionLoading(null);
+    }
+  }, [userData, adminUser, banReason]);
+
+  const handleUnban = useCallback(async () => {
+    if (!userData || !adminUser) return;
+    setActionLoading("unban");
+    try {
+      await updateDoc(doc(db, "users", userData.id), {
+        isBanned: false,
+        updatedAt: serverTimestamp(),
+      });
+      await writeLog({
+        actorId: adminUser.uid,
+        actorName: adminUser.displayName ?? "Unknown",
+        actorEmail: adminUser.email ?? "",
+        module: "user_management",
+        action: "user_unbanned",
+        description: buildDescription.userUnbanned(userData.name),
+        targetId: userData.id,
+        targetName: userData.name,
+        affectedFiles: [`users/${userData.id}`],
+      });
+      setConfirmAction(null);
+    } catch (err) {
+      console.error("[UserProfile] unban error:", err);
+    } finally {
+      setActionLoading(null);
+    }
+  }, [userData, adminUser]);
+
+  const handleDelete = useCallback(async () => {
+    if (!userData || !adminUser) return;
+    setActionLoading("delete");
+    try {
+      await deleteDoc(doc(db, "users", userData.id));
+      await writeLog({
+        actorId: adminUser.uid,
+        actorName: adminUser.displayName ?? "Unknown",
+        actorEmail: adminUser.email ?? "",
+        module: "user_management",
+        action: "user_deleted",
+        description: buildDescription.userDeleted(userData.name),
+        targetId: userData.id,
+        targetName: userData.name,
+        affectedFiles: [`users/${userData.id}`],
+      });
+      router.push("/users");
+    } catch (err) {
+      console.error("[UserProfile] delete error:", err);
+      setActionLoading(null);
+    }
+  }, [userData, adminUser, router]);
+
+  const handleConfirm = useCallback(() => {
+    switch (confirmAction) {
+      case "lift":   return handleLiftSuspension();
+      case "ban":    return handleBan();
+      case "unban":  return handleUnban();
+      case "delete": return handleDelete();
+    }
+  }, [confirmAction, handleLiftSuspension, handleBan, handleUnban, handleDelete]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -888,7 +1294,7 @@ export default function UserProfilePage() {
         <SectionCard title="Identity" icon={User}>
           <InfoRow label="User ID" value={userData.id} mono />
           <InfoRow label="Phone" value={userData.phone} />
-          <InfoRow label="Balance" value={<strong>{formatBalance(userData.balance)}</strong>} />
+          <InfoRow label="Balance" value={<strong>{formatBalance(userData.balance, symbol)}</strong>} />
           <InfoRow label="Joined" value={formatDate(userData.createdAt)} />
           <InfoRow label="Location" value={
             <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -897,6 +1303,14 @@ export default function UserProfilePage() {
             </span>
           } />
           <InfoRow label="Slot" value={userData.slot} />
+          <InfoRow
+            label="Last Online"
+            value={
+              userData.isOnline
+                ? <span style={{ color: "var(--green)" }}>Now</span>
+                : <span style={{ color: "var(--text-muted)" }}>{formatRelativeTime(userData.lastOnline)}</span>
+            }
+          />
         </SectionCard>
 
         {/* Ratings & Performance */}
@@ -922,6 +1336,9 @@ export default function UserProfilePage() {
         <SectionCard title="Account Status" icon={Shield}>
           <InfoRow label="Status" value={statusBadge} />
           <InfoRow label="Banned" value={userData.isBanned ? <Badge variant="red">Banned</Badge> : "No"} />
+          {userData.isBanned && userData.ban_reason && (
+            <InfoRow label="Ban Reason" value={<span style={{ color: "var(--text-secondary)" }}>{userData.ban_reason}</span>} />
+          )}
           <InfoRow
             label="Suspended Until"
             value={
@@ -933,6 +1350,50 @@ export default function UserProfilePage() {
                 : "—"
             }
           />
+          <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+            {suspended ? (
+              <Button
+                variant="success" size="sm" icon={ShieldCheck}
+                loading={actionLoading === "lift"}
+                onClick={() => setConfirmAction("lift")}
+              >
+                Lift Suspension
+              </Button>
+            ) : (
+              <Button
+                variant="secondary" size="sm" icon={Clock}
+                onClick={() => setSuspendModalOpen(true)}
+                disabled={userData.isBanned}
+              >
+                Suspend
+              </Button>
+            )}
+            {userData.isBanned ? (
+              <Button
+                variant="success" size="sm" icon={ShieldOff}
+                loading={actionLoading === "unban"}
+                onClick={() => setConfirmAction("unban")}
+              >
+                Unban
+              </Button>
+            ) : (
+              <Button
+                variant="danger" size="sm" icon={Ban}
+                loading={actionLoading === "ban"}
+                onClick={() => setConfirmAction("ban")}
+              >
+                Ban User
+              </Button>
+            )}
+            <Button
+              variant="danger" size="sm" icon={Trash2}
+              loading={actionLoading === "delete"}
+              onClick={() => setConfirmAction("delete")}
+              style={{ marginLeft: "auto" }}
+            >
+              Delete User
+            </Button>
+          </div>
         </SectionCard>
 
         {/* Skills */}
@@ -1022,134 +1483,433 @@ export default function UserProfilePage() {
       </div>
 
       {/* Gigs Posted */}
+      {(() => {
+        const counts = postedGigs.reduce(
+          (acc, g) => {
+            const s = g.status.toLowerCase();
+            if (s === "completed") acc.completed++;
+            else if (s === "cancelled" || s === "canceled") acc.cancelled++;
+            else if (s === "expired") acc.expired++;
+            else acc.inprogress++;
+            return acc;
+          },
+          { completed: 0, cancelled: 0, expired: 0, inprogress: 0 }
+        );
+        const totalPages = Math.max(1, Math.ceil(postedGigs.length / GIGS_PAGE_SIZE));
+        const safePage = Math.min(postedGigsPage, totalPages);
+        const paged = postedGigs.slice((safePage - 1) * GIGS_PAGE_SIZE, safePage * GIGS_PAGE_SIZE);
+
+        return (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "20px 24px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                <Briefcase size={15} style={{ color: "var(--blue)" }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
+                  Gigs Posted ({postedGigsLoading ? "…" : postedGigs.length})
+                </span>
+                {!postedGigsLoading && postedGigs.length > 0 && (
+                  <div style={{ display: "flex", gap: 6, marginLeft: 4, flexWrap: "wrap" }}>
+                    {counts.completed > 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "var(--green-dim)", color: "var(--green)" }}>Completed {counts.completed}</span>}
+                    {counts.cancelled > 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "var(--red-dim)", color: "var(--red)" }}>Cancelled {counts.cancelled}</span>}
+                    {counts.expired > 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "rgba(245,158,11,0.12)", color: "var(--amber,#f59e0b)" }}>Expired {counts.expired}</span>}
+                    {counts.inprogress > 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "var(--blue-dim)", color: "var(--blue)" }}>In Progress {counts.inprogress}</span>}
+                  </div>
+                )}
+              </div>
+              {postedGigsLoading ? (
+                <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>Loading gigs…</div>
+              ) : postedGigs.length === 0 ? (
+                <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>No gigs posted yet.</div>
+              ) : (
+                <>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                          {["Title", "Type", "Gig ID", "Status", "Rating (Host)", "Assigned Worker", "Worker ID", "Pay", "Date"].map((h) => (
+                            <th key={h} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {paged.map((gig) => {
+                          const s = gig.status.toLowerCase();
+                          const isCompleted = s === "completed";
+                          const isCancelled = s === "cancelled" || s === "canceled";
+                          const isExpired = s === "expired";
+                          return (
+                            <tr key={`${gig.gigType}-${gig.id}`} style={{ borderBottom: "1px solid var(--border-muted)" }}>
+                              <td style={{ padding: "9px 10px", color: "var(--text-primary)", fontWeight: 500, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{gig.title}</td>
+                              <td style={{ padding: "9px 10px" }}>
+                                <span style={{ fontSize: 11, fontWeight: 600, background: "var(--blue-dim)", color: "var(--blue)", borderRadius: 20, padding: "2px 8px" }}>
+                                  {WORKED_GIG_LABELS[gig.gigType]}
+                                </span>
+                              </td>
+                              <td style={{ padding: "9px 10px" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                  <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--text-muted)" }} title={gig.id}>{gig.id.slice(0, 10)}…</span>
+                                  <button
+                                    title="Copy gig ID"
+                                    onClick={() => handleCopy(gig.id, gig.id)}
+                                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, border: "none", background: "none", cursor: "pointer", borderRadius: 4, padding: 0, color: copiedKey === gig.id ? "var(--green)" : "var(--text-muted)", flexShrink: 0 }}
+                                  >
+                                    {copiedKey === gig.id ? <Check size={11} /> : <Copy size={11} />}
+                                  </button>
+                                </div>
+                              </td>
+                              <td style={{ padding: "9px 10px" }}>
+                                <span style={{
+                                  fontSize: 11, fontWeight: 600, borderRadius: 20, padding: "2px 8px",
+                                  background: isCompleted ? "var(--green-dim)" : isCancelled ? "var(--red-dim)" : isExpired ? "rgba(245,158,11,0.12)" : "var(--blue-dim)",
+                                  color: isCompleted ? "var(--green)" : isCancelled ? "var(--red)" : isExpired ? "var(--amber,#f59e0b)" : "var(--blue)",
+                                }}>
+                                  {isCompleted ? "Completed" : isCancelled ? "Cancelled" : isExpired ? "Expired" : "In Progress"}
+                                </span>
+                              </td>
+                              <td style={{ padding: "9px 10px", whiteSpace: "nowrap" }}>
+                                {gig.hostRating != null
+                                  ? <span style={{ color: "var(--amber,#f59e0b)", fontWeight: 600 }}>{"★".repeat(Math.round(gig.hostRating))} <span style={{ color: "var(--text-muted)", fontWeight: 400, fontSize: 11 }}>{gig.hostRating.toFixed(1)}</span></span>
+                                  : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                              </td>
+                              <td style={{ padding: "9px 10px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+                                {gig.assignedWorkerName ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
+                              </td>
+                              <td style={{ padding: "9px 10px" }}>
+                                {gig.assignedWorkerId ? (
+                                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                    <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--text-muted)" }} title={gig.assignedWorkerId}>{gig.assignedWorkerId.slice(0, 10)}…</span>
+                                    <button
+                                      title="Copy worker ID"
+                                      onClick={() => handleCopy(`worker-${gig.id}`, gig.assignedWorkerId!)}
+                                      style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, border: "none", background: "none", cursor: "pointer", borderRadius: 4, padding: 0, color: copiedKey === `worker-${gig.id}` ? "var(--green)" : "var(--text-muted)", flexShrink: 0 }}
+                                    >
+                                      {copiedKey === `worker-${gig.id}` ? <Check size={11} /> : <Copy size={11} />}
+                                    </button>
+                                  </div>
+                                ) : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                              </td>
+                              <td style={{ padding: "9px 10px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>{gig.salary != null ? `${symbol}${gig.salary}` : "—"}</td>
+                              <td style={{ padding: "9px 10px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                                {gig.createdAt ? gig.createdAt.toDate().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {totalPages > 1 && (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 0", borderTop: "1px solid var(--border-muted)", marginTop: 8 }}>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        {(safePage - 1) * GIGS_PAGE_SIZE + 1}–{Math.min(safePage * GIGS_PAGE_SIZE, postedGigs.length)} of {postedGigs.length}
+                      </span>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button onClick={() => setPostedGigsPage((p) => Math.max(1, p - 1))} disabled={safePage === 1} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-elevated)", color: "var(--text-secondary)", fontSize: 12, cursor: safePage === 1 ? "not-allowed" : "pointer", opacity: safePage === 1 ? 0.4 : 1, fontFamily: "inherit" }}>
+                          <ChevronLeft size={12} /> Prev
+                        </button>
+                        <span style={{ display: "flex", alignItems: "center", padding: "4px 10px", fontSize: 12, color: "var(--text-muted)" }}>
+                          {safePage} / {totalPages}
+                        </span>
+                        <button onClick={() => setPostedGigsPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-elevated)", color: "var(--text-secondary)", fontSize: 12, cursor: safePage === totalPages ? "not-allowed" : "pointer", opacity: safePage === totalPages ? 0.4 : 1, fontFamily: "inherit" }}>
+                          Next <ChevronRight size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Gigs Worked */}
+      {(() => {
+        const counts = workedGigs.reduce(
+          (acc, g) => {
+            const s = g.status.toLowerCase();
+            if (s === "completed") acc.completed++;
+            else if (s === "cancelled" || s === "canceled") acc.cancelled++;
+            else if (s === "expired") acc.expired++;
+            else acc.inprogress++;
+            return acc;
+          },
+          { completed: 0, cancelled: 0, expired: 0, inprogress: 0 }
+        );
+        const totalPages = Math.max(1, Math.ceil(workedGigs.length / GIGS_PAGE_SIZE));
+        const safePage = Math.min(workedGigsPage, totalPages);
+        const paged = workedGigs.slice((safePage - 1) * GIGS_PAGE_SIZE, safePage * GIGS_PAGE_SIZE);
+
+        return (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "20px 24px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                <CheckCircle size={15} style={{ color: "var(--blue)" }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
+                  Gigs Worked ({workedGigsLoading ? "…" : workedGigs.length})
+                </span>
+                {!workedGigsLoading && workedGigs.length > 0 && (
+                  <div style={{ display: "flex", gap: 6, marginLeft: 4, flexWrap: "wrap" }}>
+                    {counts.completed > 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "var(--green-dim)", color: "var(--green)" }}>Completed {counts.completed}</span>}
+                    {counts.cancelled > 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "var(--red-dim)", color: "var(--red)" }}>Cancelled {counts.cancelled}</span>}
+                    {counts.expired > 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "rgba(245,158,11,0.12)", color: "var(--amber,#f59e0b)" }}>Expired {counts.expired}</span>}
+                    {counts.inprogress > 0 && <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: "var(--blue-dim)", color: "var(--blue)" }}>In Progress {counts.inprogress}</span>}
+                  </div>
+                )}
+              </div>
+              {workedGigsLoading ? (
+                <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>Loading gigs…</div>
+              ) : workedGigs.length === 0 ? (
+                <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>No gigs worked yet.</div>
+              ) : (
+                <>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                          {["Title", "Type", "Gig ID", "Status", "Rating (Worker)", "Host Name", "Host ID", "Pay", "Date"].map((h) => (
+                            <th key={h} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {paged.map((gig) => {
+                          const s = gig.status.toLowerCase();
+                          const isCompleted = s === "completed";
+                          const isCancelled = s === "cancelled" || s === "canceled";
+                          const isExpired = s === "expired";
+                          return (
+                            <tr key={`${gig.gigType}-${gig.id}`} style={{ borderBottom: "1px solid var(--border-muted)" }}>
+                              <td style={{ padding: "9px 10px", color: "var(--text-primary)", fontWeight: 500, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{gig.title}</td>
+                              <td style={{ padding: "9px 10px" }}>
+                                <span style={{ fontSize: 11, fontWeight: 600, background: "var(--blue-dim)", color: "var(--blue)", borderRadius: 20, padding: "2px 8px" }}>
+                                  {WORKED_GIG_LABELS[gig.gigType]}
+                                </span>
+                              </td>
+                              <td style={{ padding: "9px 10px" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                  <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--text-muted)" }} title={gig.id}>{gig.id.slice(0, 10)}…</span>
+                                  <button
+                                    title="Copy gig ID"
+                                    onClick={() => handleCopy(gig.id, gig.id)}
+                                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, border: "none", background: "none", cursor: "pointer", borderRadius: 4, padding: 0, color: copiedKey === gig.id ? "var(--green)" : "var(--text-muted)", flexShrink: 0 }}
+                                  >
+                                    {copiedKey === gig.id ? <Check size={11} /> : <Copy size={11} />}
+                                  </button>
+                                </div>
+                              </td>
+                              <td style={{ padding: "9px 10px" }}>
+                                <span style={{
+                                  fontSize: 11, fontWeight: 600, borderRadius: 20, padding: "2px 8px",
+                                  background: isCompleted ? "var(--green-dim)" : isCancelled ? "var(--red-dim)" : isExpired ? "rgba(245,158,11,0.12)" : "var(--blue-dim)",
+                                  color: isCompleted ? "var(--green)" : isCancelled ? "var(--red)" : isExpired ? "var(--amber,#f59e0b)" : "var(--blue)",
+                                }}>
+                                  {isCompleted ? "Completed" : isCancelled ? "Cancelled" : isExpired ? "Expired" : "In Progress"}
+                                </span>
+                              </td>
+                              <td style={{ padding: "9px 10px", whiteSpace: "nowrap" }}>
+                                {gig.workerRating != null
+                                  ? <span style={{ color: "var(--amber,#f59e0b)", fontWeight: 600 }}>{"★".repeat(Math.round(gig.workerRating))} <span style={{ color: "var(--text-muted)", fontWeight: 400, fontSize: 11 }}>{gig.workerRating.toFixed(1)}</span></span>
+                                  : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                              </td>
+                              <td style={{ padding: "9px 10px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+                                {gig.hostName ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
+                              </td>
+                              <td style={{ padding: "9px 10px" }}>
+                                {gig.hostId ? (
+                                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                    <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--text-muted)" }} title={gig.hostId}>{gig.hostId.slice(0, 10)}…</span>
+                                    <button
+                                      title="Copy host ID"
+                                      onClick={() => handleCopy(`host-${gig.id}`, gig.hostId!)}
+                                      style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, border: "none", background: "none", cursor: "pointer", borderRadius: 4, padding: 0, color: copiedKey === `host-${gig.id}` ? "var(--green)" : "var(--text-muted)", flexShrink: 0 }}
+                                    >
+                                      {copiedKey === `host-${gig.id}` ? <Check size={11} /> : <Copy size={11} />}
+                                    </button>
+                                  </div>
+                                ) : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                              </td>
+                              <td style={{ padding: "9px 10px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>{gig.salary != null ? `${symbol}${gig.salary}` : "—"}</td>
+                              <td style={{ padding: "9px 10px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                                {gig.createdAt ? gig.createdAt.toDate().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {totalPages > 1 && (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 0", borderTop: "1px solid var(--border-muted)", marginTop: 8 }}>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        {(safePage - 1) * GIGS_PAGE_SIZE + 1}–{Math.min(safePage * GIGS_PAGE_SIZE, workedGigs.length)} of {workedGigs.length}
+                      </span>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button onClick={() => setWorkedGigsPage((p) => Math.max(1, p - 1))} disabled={safePage === 1} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-elevated)", color: "var(--text-secondary)", fontSize: 12, cursor: safePage === 1 ? "not-allowed" : "pointer", opacity: safePage === 1 ? 0.4 : 1, fontFamily: "inherit" }}>
+                          <ChevronLeft size={12} /> Prev
+                        </button>
+                        <span style={{ display: "flex", alignItems: "center", padding: "4px 10px", fontSize: 12, color: "var(--text-muted)" }}>
+                          {safePage} / {totalPages}
+                        </span>
+                        <button onClick={() => setWorkedGigsPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-elevated)", color: "var(--text-secondary)", fontSize: 12, cursor: safePage === totalPages ? "not-allowed" : "pointer", opacity: safePage === totalPages ? 0.4 : 1, fontFamily: "inherit" }}>
+                          Next <ChevronRight size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Suspension & Ban History */}
       <div style={{ marginTop: 16 }}>
         <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "20px 24px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-            <Briefcase size={15} style={{ color: "var(--blue)" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <History size={15} style={{ color: "var(--blue)" }} />
             <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
-              Gigs Posted ({postedGigsLoading ? "…" : postedGigs.length})
+              Suspension & Ban History ({historyLoading ? "…" : suspensionHistory.length})
             </span>
           </div>
-          {postedGigsLoading ? (
-            <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>Loading gigs…</div>
-          ) : postedGigs.length === 0 ? (
-            <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>
-              No gigs posted yet.
-            </div>
+          {historyLoading ? (
+            <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>Loading history…</div>
+          ) : suspensionHistory.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>No moderation history found.</div>
           ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                    {["Title", "Type", "Category", "Status", "Pay", "Date"].map((h) => (
-                      <th key={h} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {postedGigs.map((gig) => (
-                    <tr key={`${gig.gigType}-${gig.id}`} style={{ borderBottom: "1px solid var(--border-muted)" }}>
-                      <td style={{ padding: "9px 10px", color: "var(--text-primary)", fontWeight: 500, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {gig.title}
-                      </td>
-                      <td style={{ padding: "9px 10px" }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, background: "var(--blue-dim)", color: "var(--blue)", borderRadius: 20, padding: "2px 8px" }}>
-                          {WORKED_GIG_LABELS[gig.gigType]}
-                        </span>
-                      </td>
-                      <td style={{ padding: "9px 10px", color: "var(--text-muted)" }}>
-                        {gig.category ?? "—"}
-                      </td>
-                      <td style={{ padding: "9px 10px" }}>
-                        <span style={{
-                          fontSize: 11, fontWeight: 600, borderRadius: 20, padding: "2px 8px",
-                          background: gig.status === "completed" ? "var(--green-dim)" : gig.status === "cancelled" ? "var(--red-dim)" : "var(--bg-elevated)",
-                          color: gig.status === "completed" ? "var(--green)" : gig.status === "cancelled" ? "var(--red)" : "var(--text-muted)",
-                        }}>
-                          {gig.status}
-                        </span>
-                      </td>
-                      <td style={{ padding: "9px 10px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>
-                        {gig.salary != null ? `₱${gig.salary}` : "—"}
-                      </td>
-                      <td style={{ padding: "9px 10px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                        {gig.createdAt ? gig.createdAt.toDate().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              {suspensionHistory.map((entry, i) => {
+                const isSuspend  = entry.action === "user_suspended";
+                const isUnsuspend = entry.action === "user_unsuspended";
+                const isBan      = entry.action === "user_banned";
+                const isUnban    = entry.action === "user_unbanned";
+                const color = isSuspend ? "var(--orange,#f97316)" : isUnsuspend ? "var(--green)" : isBan ? "var(--red)" : "var(--green)";
+                const label = isSuspend ? "Suspended" : isUnsuspend ? "Suspension Lifted" : isBan ? "Banned" : "Unbanned";
+                const reason = entry.meta?.other?.reason;
+                const duration = entry.meta?.other?.duration_minutes;
+                const tier = entry.meta?.other?.tier;
+                return (
+                  <div
+                    key={entry.id}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "auto 1fr auto",
+                      gap: "0 14px",
+                      padding: "10px 0",
+                      borderBottom: i < suspensionHistory.length - 1 ? "1px solid var(--border-muted)" : "none",
+                      alignItems: "start",
+                    }}
+                  >
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, paddingTop: 2 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                      {i < suspensionHistory.length - 1 && (
+                        <div style={{ width: 1, flex: 1, background: "var(--border-muted)", minHeight: 20 }} />
+                      )}
+                    </div>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color }}>{label}</span>
+                        {isSuspend && duration != null && (
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>· {duration} min{tier ? ` (${tier})` : ""}</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{entry.description}</div>
+                      {reason && (
+                        <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 3, fontStyle: "italic" }}>Reason: {reason}</div>
+                      )}
+                      <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3 }}>by {entry.actorName}</div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap", paddingTop: 2 }}>
+                      {entry.createdAt
+                        ? entry.createdAt.toDate().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })
+                        : "—"}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       </div>
 
-      {/* Gigs Worked */}
-      <div style={{ marginTop: 16 }}>
-        <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "20px 24px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-            <CheckCircle size={15} style={{ color: "var(--blue)" }} />
-            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
-              Gigs Worked ({workedGigsLoading ? "…" : workedGigs.length})
-            </span>
-          </div>
-          {workedGigsLoading ? (
-            <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>Loading gigs…</div>
-          ) : workedGigs.length === 0 ? (
-            <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>
-              No gigs worked yet.
-            </div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                    {["Title", "Type", "Category", "Status", "Pay", "Date"].map((h) => (
-                      <th key={h} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {workedGigs.map((gig) => (
-                    <tr key={`${gig.gigType}-${gig.id}`} style={{ borderBottom: "1px solid var(--border-muted)" }}>
-                      <td style={{ padding: "9px 10px", color: "var(--text-primary)", fontWeight: 500, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {gig.title}
-                      </td>
-                      <td style={{ padding: "9px 10px" }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, background: "var(--blue-dim)", color: "var(--blue)", borderRadius: 20, padding: "2px 8px" }}>
-                          {WORKED_GIG_LABELS[gig.gigType]}
-                        </span>
-                      </td>
-                      <td style={{ padding: "9px 10px", color: "var(--text-muted)" }}>
-                        {gig.category ?? "—"}
-                      </td>
-                      <td style={{ padding: "9px 10px" }}>
-                        <span style={{
-                          fontSize: 11, fontWeight: 600, borderRadius: 20, padding: "2px 8px",
-                          background: gig.status === "completed" ? "var(--green-dim)" : gig.status === "cancelled" ? "var(--red-dim)" : "var(--bg-elevated)",
-                          color: gig.status === "completed" ? "var(--green)" : gig.status === "cancelled" ? "var(--red)" : "var(--text-muted)",
-                        }}>
-                          {gig.status}
-                        </span>
-                      </td>
-                      <td style={{ padding: "9px 10px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>
-                        {gig.salary != null ? `$${gig.salary}` : "—"}
-                      </td>
-                      <td style={{ padding: "9px 10px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                        {gig.createdAt ? gig.createdAt.toDate().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
+      {/* Suspend Modal */}
+      <SuspendModal
+        open={suspendModalOpen}
+        onClose={() => { if (!actionLoading) setSuspendModalOpen(false); }}
+        user={userData}
+        tiers={suspensionTiers}
+        onConfirm={handleSuspend}
+        loading={actionLoading === "suspend"}
+      />
+
+      {/* Confirm dialogs */}
+      {confirmAction && (() => {
+        const configs: Record<NonNullable<ConfirmAction>, { title: string; message: string; label: string; danger: boolean }> = {
+          lift: {
+            title: "Lift Suspension",
+            message: `Remove the active suspension for ${userData.name}? They will be able to accept gigs immediately.`,
+            label: "Lift Suspension",
+            danger: false,
+          },
+          ban: {
+            title: "Ban User",
+            message: `Permanently ban ${userData.name}? They will be unable to use the app until unbanned.`,
+            label: "Ban User",
+            danger: true,
+          },
+          unban: {
+            title: "Unban User",
+            message: `Lift the ban on ${userData.name}? They will regain full access to the app.`,
+            label: "Unban",
+            danger: false,
+          },
+          delete: {
+            title: "Delete User",
+            message: `Permanently delete ${userData.name}'s account? This action cannot be undone.`,
+            label: "Delete",
+            danger: true,
+          },
+        };
+        const cfg = configs[confirmAction];
+        return (
+          <ConfirmDialog
+            open
+            onClose={() => { if (!actionLoading) { setConfirmAction(null); setBanReason(""); } }}
+            onConfirm={handleConfirm}
+            title={cfg.title}
+            message={cfg.message}
+            confirmLabel={cfg.label}
+            danger={cfg.danger}
+            loading={actionLoading !== null}
+          >
+            {confirmAction === "ban" && (
+              <div style={{ marginTop: 14 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+                  Reason <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>(optional)</span>
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="e.g. Repeated policy violations, fraudulent activity…"
+                  value={banReason}
+                  onChange={(e) => setBanReason(e.target.value)}
+                  style={{
+                    width: "100%", resize: "vertical", padding: "8px 10px",
+                    background: "var(--bg-elevated)", border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-sm)", color: "var(--text-primary)",
+                    fontSize: 13, fontFamily: "inherit", lineHeight: 1.5,
+                    outline: "none", boxSizing: "border-box",
+                  }}
+                />
+              </div>
+            )}
+          </ConfirmDialog>
+        );
+      })()}
 
       {/* Skills Modal */}
       {userData && (

@@ -30,6 +30,7 @@ import {
   Clock,
 } from "lucide-react";
 import { getModuleConfig } from "@/lib/activityLogConfig";
+import { useCurrency } from "@/context/CurrencyContext";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -191,6 +192,7 @@ function QuickLink({
 
 export default function DashboardPage() {
   useAuthGuard();
+  const { symbol } = useCurrency();
 
   const [totalUsers, setTotalUsers] = useState(0);
   const [onlineUsers, setOnlineUsers] = useState(0);
@@ -458,7 +460,7 @@ export default function DashboardPage() {
                     gig.status.toLowerCase() === "cancelled" ? "red"   : "gray";
                   const salary = gig.salary
                     ? (typeof gig.salary === "number"
-                        ? `$${gig.salary.toLocaleString()}`
+                        ? `${symbol}${gig.salary.toLocaleString()}`
                         : String(gig.salary))
                     : null;
                   return (

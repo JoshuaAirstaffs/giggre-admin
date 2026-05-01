@@ -19,14 +19,16 @@ import {
   MapPin,
   Filter,
   SlidersHorizontal,
-  DollarSign,
   Users,
   Calendar,
   Tag,
   Timer,
+  Copy,
+  Check,
 } from "lucide-react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/context/AuthContext";
+import { useCurrency } from "@/context/CurrencyContext";
 import { writeLog, buildDescription } from "@/lib/activitylog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -157,6 +159,7 @@ function statusLabel(status: string): string {
 export default function LiveGigsPage() {
   useAuthGuard({ module: "live-gigs" });
   const { user } = useAuth();
+  const { symbol } = useCurrency();
 
   const PAGE_SIZE = 10;
 
@@ -427,6 +430,7 @@ export default function LiveGigsPage() {
       const q = search.toLowerCase();
       list = list.filter(
         (g) =>
+          g.id?.toLowerCase().includes(q) ||
           g.title?.toLowerCase().includes(q) ||
           g.category?.toLowerCase().includes(q) ||
           g.postedBy?.toLowerCase().includes(q) ||
@@ -851,7 +855,7 @@ export default function LiveGigsPage() {
             <Search size={13} className="lg-search-icon" />
             <input
               className="lg-search"
-              placeholder="Search title, category, posted by, location…"
+              placeholder="Search gig ID, title, category, posted by, location…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -1085,18 +1089,17 @@ export default function LiveGigsPage() {
                       />
                     </th>
                   )}
+                  <th>Gig ID</th>
                   <th>Gig</th>
                   <th>User</th>
                   <th>Type</th>
                   <th>Status</th>
-                  <th>Applications</th>
                   <th>Posted</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {paginated.map((gig) => {
-                  const appCount = gig.applications?.length ?? 0;
                   const loc = formatLocation(gig.location);
                   const s = gig.status?.toLowerCase();
                   const isInProgress = s !== "completed" && s !== "no_worker" && s !== "expired" && s !== "cancelled";
@@ -1122,6 +1125,9 @@ export default function LiveGigsPage() {
                           />
                         </td>
                       )}
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <CopyableId id={gig.id} />
+                      </td>
                       <td>
                         <div className="lg-gig-title">{gig.title || "Untitled Gig"}</div>
                         {loc && <div className="lg-gig-meta"><MapPin size={10} />{loc}</div>}
@@ -1153,12 +1159,6 @@ export default function LiveGigsPage() {
                           <div style={{ fontSize: 10, color: "var(--red)", fontWeight: 600, marginTop: 3, opacity: 0.8 }}>
                             by admin
                           </div>
-                        )}
-                      </td>
-                      <td>
-                        <span className="lg-num">{appCount}</span>
-                        {appCount > 0 && (
-                          <span className="lg-num-label">{appCount === 1 ? "app" : "apps"}</span>
                         )}
                       </td>
                       <td>
@@ -1427,6 +1427,10 @@ function GigDetailModal({
       <div className="gd-header">
         <div className="gd-header-info">
           <div className="gd-title">{gig.title || "Untitled Gig"}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "'Space Mono', monospace" }}>ID</span>
+            <CopyableId id={gig.id} showFull />
+          </div>
           <div className="gd-tags">
             <span className={`lg-badge lg-badge--type-${gig.gigType}`}>
               {GIG_TYPE_LABELS[gig.gigType]} Gig
@@ -1498,10 +1502,7 @@ function GigDetailModal({
           {gig.salary !== undefined && gig.salary !== null && gig.salary !== "" && (
             <div className="gd-field">
               <span className="gd-field-label">Salary</span>
-              <span className="gd-field-val" style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <DollarSign size={11} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
-                {gig.salary}
-              </span>
+              <span className="gd-field-val">{symbol}{gig.salary}</span>
             </div>
           )}
           {gig.vacancy !== undefined && (
@@ -1581,6 +1582,35 @@ function GigDetailModal({
         <div className="cgm-error" style={{ marginTop: 12 }}>{cancelError}</div>
       )}
     </Modal>
+  );
+}
+
+// ─── Copyable ID ──────────────────────────────────────────────────────────────
+
+function CopyableId({ id, showFull }: { id: string; showFull?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: "var(--text-muted)" }}>
+        {showFull ? id : `${id.slice(0, 8)}…`}
+      </span>
+      <button
+        onClick={() => {
+          navigator.clipboard.writeText(id);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }}
+        title={copied ? "Copied!" : "Copy full ID"}
+        style={{
+          display: "flex", alignItems: "center",
+          color: copied ? "var(--green)" : "var(--text-muted)",
+          background: "none", border: "none", cursor: "pointer",
+          padding: 2, transition: "color 0.15s", flexShrink: 0,
+        }}
+      >
+        {copied ? <Check size={11} /> : <Copy size={11} />}
+      </button>
+    </span>
   );
 }
 

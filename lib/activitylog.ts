@@ -34,7 +34,9 @@ export type UserLogAction =
   | "user_suspended"
   | "user_unsuspended"
   | "user_skills_updated"
-  | "user_host_reward_skills_updated";
+  | "user_host_reward_skills_updated"
+  | "user_deletion_scheduled"
+  | "user_deletion_cancelled";
 
 export type GigLogAction =
   | "gig_created"
@@ -58,6 +60,10 @@ export type UserRequestLogAction =
   | "user_request_reopened"
   | "user_request_note";
 
+export type VerificationLogAction =
+  | "verification_verified"
+  | "verification_rejected";
+
 export type LogAction =
   | AdminLogAction
   | ContentLogAction
@@ -66,7 +72,8 @@ export type LogAction =
   | QuickGigLogAction
   | SkillLogAction
   | SettingsLogAction
-  | UserRequestLogAction;
+  | UserRequestLogAction
+  | VerificationLogAction;
 
 export type LogModule =
   | "admin_management"
@@ -78,7 +85,8 @@ export type LogModule =
   | "announcements"
   | "library"
   | "quick_gig_config"
-  | "user_requests";
+  | "user_requests"
+  | "verification";
 
 export type ContentSectionKey =
   | "carousel_items"
@@ -198,6 +206,12 @@ export const buildDescription = {
 
   userDeleted: (targetName: string) =>
     `Permanently deleted user account for ${targetName}`,
+
+  userDeletionScheduled: (targetName: string, deleteAt: Date) =>
+    `Scheduled account deletion for ${targetName} on ${deleteAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
+
+  userDeletionCancelled: (targetName: string) =>
+    `Cancelled scheduled account deletion for ${targetName}`,
 
   userBanned: (targetName: string) =>
     `Banned user ${targetName}`,

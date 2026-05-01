@@ -8,6 +8,7 @@ import "leaflet/dist/leaflet.css";
 import "react-leaflet-cluster/dist/assets/MarkerCluster.css";
 import "react-leaflet-cluster/dist/assets/MarkerCluster.Default.css";
 import { Timestamp } from "firebase/firestore";
+import { useCurrency } from "@/context/CurrencyContext";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -123,6 +124,7 @@ function GigPopup({ gig, theme }: { gig: GigMarker; theme: MapTheme }) {
   const color = GIG_COLORS[gig.gigType];
   const isAvailable = gig.status?.toLowerCase() === "available";
   const pt = POPUP_THEME[theme];
+  const { symbol } = useCurrency();
 
   return (
     <div style={{ minWidth: 180, fontFamily: "DM Sans, sans-serif" }}>
@@ -153,7 +155,7 @@ function GigPopup({ gig, theme }: { gig: GigMarker; theme: MapTheme }) {
         {gig.category && <PopupRow label="Category" labelColor={pt.label} valueColor={pt.value}>{gig.category}</PopupRow>}
         {gig.postedBy && <PopupRow label="Posted by" labelColor={pt.label} valueColor={pt.value}>{gig.postedBy}</PopupRow>}
         {gig.salary !== undefined && gig.salary !== null && gig.salary !== "" && (
-          <PopupRow label="Salary" labelColor={pt.label} valueColor={pt.value}>₱{gig.salary}</PopupRow>
+          <PopupRow label="Salary" labelColor={pt.label} valueColor={pt.value}>{symbol}{gig.salary}</PopupRow>
         )}
         {gig.vacancy !== undefined && (
           <PopupRow label="Vacancies" labelColor={pt.label} valueColor={pt.value}>{String(gig.vacancy)}</PopupRow>
@@ -256,6 +258,7 @@ const POPUP_THEME = {
 
 function GigListPopup({ gigs, theme }: { gigs: GigMarker[]; theme: MapTheme }) {
   const pt = POPUP_THEME[theme];
+  const { symbol } = useCurrency();
   return (
     <div style={{ fontFamily: "DM Sans, sans-serif", minWidth: 220 }}>
       <div style={{
@@ -295,7 +298,7 @@ function GigListPopup({ gigs, theme }: { gigs: GigMarker[]; theme: MapTheme }) {
                 <span style={{ fontSize: 10, color, fontWeight: 600 }}>{GIG_LABELS[gig.gigType]}</span>
                 {gig.category && <span style={{ fontSize: 10, color: pt.value }}>{gig.category}</span>}
                 {gig.salary !== undefined && gig.salary !== null && gig.salary !== "" && (
-                  <span style={{ fontSize: 10, color: pt.value }}>₱{gig.salary}</span>
+                  <span style={{ fontSize: 10, color: pt.value }}>{symbol}{gig.salary}</span>
                 )}
                 {gig.vacancy !== undefined && (
                   <span style={{ fontSize: 10, color: pt.label }}>{gig.vacancy} vacancy</span>

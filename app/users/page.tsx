@@ -14,20 +14,22 @@ import {
   getDoc,
   getDocs,
   updateDoc,
-  deleteDoc,
   serverTimestamp,
   Timestamp,
   GeoPoint,
   query,
   where,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, auth } from "@/lib/firebase";
 import { writeLog, buildDescription } from "@/lib/activitylog";
 import {
   Search, ChevronDown, ChevronUp, X,
   Users, ArrowUpDown, ExternalLink, Clock, ShieldOff,
   Ban, ShieldCheck, Trash2, AlertTriangle, Briefcase, CheckCircle,
+  Copy, Check, UserPlus,
 } from "lucide-react";
+
+import { useCurrency } from "@/context/CurrencyContext";
 
 // ─── Gig types (for user gigs panel) ──────────────────────────────────────────
 
@@ -93,20 +95,25 @@ interface AppUser {
   // Status / moderation
   suspended_until: Timestamp | null;
   isBanned: boolean;
+  pendingDeletion: boolean;
+  scheduledDeleteAt: Timestamp | null;
   // Additional stats
   quickGigDailyDeclineCount: number;
   quickGigTotalDeclines: number;
   totalGigs: number;
+  lastOnline: Timestamp | null;
+  ban_reason: string | null;
 }
 
-type SortField = "createdAt" | "balance" | "name";
+type SortField = "createdAt" | "balance" | "name" | "online";
 type SortDir = "asc" | "desc";
-type StatusFilter = "all" | "online" | "offline" | "suspended" | "banned";
+type StatusFilter = "all" | "online" | "offline" | "suspended" | "banned" | "pending_deletion";
 
 const SORT_LABELS: Record<SortField, { label: string; asc: string; desc: string }> = {
   name:      { label: "Name",    asc: "A → Z",        desc: "Z → A"        },
   balance:   { label: "Balance", asc: "Low → High",   desc: "High → Low"   },
   createdAt: { label: "Date",    asc: "Oldest first", desc: "Newest first" },
+  online:    { label: "Online",   asc: "Offline first", desc: "Online first"  },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -122,11 +129,10 @@ function formatDate(ts: Timestamp | null): string {
   });
 }
 
-function formatBalance(n: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
+function formatBalance(n: number, symbol: string): string {
+  return symbol + new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(n ?? 0);
 }
 
@@ -138,6 +144,21 @@ function formatLocation(loc: GeoPoint | null): string {
 function formatRating(n: number): string {
   if (!n && n !== 0) return "N/A";
   return n.toFixed(1);
+}
+
+function formatRelativeTime(ts: Timestamp | null): string {
+  if (!ts) return "Never";
+  const diff = Date.now() - ts.toDate().getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w ago`;
+  return ts.toDate().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function isCurrentlySuspended(user: AppUser): boolean {
@@ -179,9 +200,13 @@ function toUser(id: string, d: Record<string, any>): AppUser {
     userId:            d.userId            ?? d.uid ?? id,
     suspended_until:   d.suspended_until instanceof Timestamp ? d.suspended_until : null,
     isBanned:          d.isBanned          ?? false,
+    pendingDeletion:   d.pendingDeletion   ?? false,
+    scheduledDeleteAt: d.scheduledDeleteAt instanceof Timestamp ? d.scheduledDeleteAt : null,
     quickGigDailyDeclineCount: typeof d.quickGigDailyDeclineCount === "number" ? d.quickGigDailyDeclineCount : 0,
     quickGigTotalDeclines:     typeof d.quickGigTotalDeclines     === "number" ? d.quickGigTotalDeclines     : 0,
     totalGigs:                 typeof d.totalGigs                 === "number" ? d.totalGigs                 : 0,
+    lastOnline:  d.lastOnline instanceof Timestamp ? d.lastOnline : null,
+    ban_reason:  typeof d.ban_reason === "string" ? d.ban_reason : null,
   };
 }
 
@@ -353,6 +378,7 @@ interface ExpandedRowProps {
   onBan: () => void;
   onUnban: () => void;
   onDelete: () => void;
+  onCancelDeletion: () => void;
   actionLoading: string | null;
   onViewGigs: () => void;
   onViewWorkedGigs: () => void;
@@ -360,7 +386,7 @@ interface ExpandedRowProps {
 
 const ExpandedRow = memo(function ExpandedRow({
   user, colSpan, applicableTier, suspended, canSuspend,
-  onViewProfile, onSuspend, onLiftSuspension, onBan, onUnban, onDelete,
+  onViewProfile, onSuspend, onLiftSuspension, onBan, onUnban, onDelete, onCancelDeletion,
   actionLoading, onViewGigs, onViewWorkedGigs,
 }: ExpandedRowProps) {
   return (
@@ -457,6 +483,22 @@ const ExpandedRow = memo(function ExpandedRow({
               <span className="exp-value" style={{ color: "var(--orange,#f97316)" }}>{formatDate(user.suspended_until)}</span>
             </div>
           )}
+          {user.isBanned && user.ban_reason && (
+            <div className="exp-field">
+              <span className="exp-label">Ban Reason</span>
+              <span className="exp-value" style={{ color: "var(--text-secondary)" }}>{user.ban_reason}</span>
+            </div>
+          )}
+          {user.pendingDeletion && user.scheduledDeleteAt && (
+            <div className="exp-field">
+              <span className="exp-label">Scheduled Deletion</span>
+              <span className="exp-value" style={{ color: "var(--red)" }}>{formatDate(user.scheduledDeleteAt)}</span>
+            </div>
+          )}
+          <div className="exp-field">
+            <span className="exp-label">Last Online</span>
+            <span className="exp-value">{user.isOnline ? <span style={{ color: "var(--green)" }}>Now</span> : formatRelativeTime(user.lastOnline)}</span>
+          </div>
         </div>
 
         {user.skills.length > 0 && (
@@ -537,15 +579,27 @@ const ExpandedRow = memo(function ExpandedRow({
             Gigs Completed
           </Button>
 
-          <Button
-            variant="danger" size="sm"
-            icon={Trash2}
-            loading={actionLoading === "delete"}
-            onClick={onDelete}
-            style={{ marginLeft: "auto" }}
-          >
-            Delete User
-          </Button>
+          {user.pendingDeletion ? (
+            <Button
+              variant="success" size="sm"
+              icon={ShieldCheck}
+              loading={actionLoading === "cancel_deletion"}
+              onClick={onCancelDeletion}
+              style={{ marginLeft: "auto" }}
+            >
+              Cancel Deletion
+            </Button>
+          ) : (
+            <Button
+              variant="danger" size="sm"
+              icon={Trash2}
+              loading={actionLoading === "delete"}
+              onClick={onDelete}
+              style={{ marginLeft: "auto" }}
+            >
+              Delete User
+            </Button>
+          )}
         </div>
 
       </td>
@@ -557,11 +611,12 @@ const ExpandedRow = memo(function ExpandedRow({
 
 const PAGE_SIZE = 15;
 
-type ConfirmAction = "ban" | "unban" | "lift" | "delete" | null;
+type ConfirmAction = "ban" | "unban" | "lift" | "delete" | "cancel_deletion" | null;
 
 export default function UsersPage() {
   const { user: adminUser } = useAuthGuard({ module: "users" });
   const router = useRouter();
+  const { symbol } = useCurrency();
 
   const [users, setUsers]                   = useState<AppUser[]>([]);
   const [loading, setLoading]               = useState(true);
@@ -576,6 +631,8 @@ export default function UsersPage() {
   const [actionLoading, setActionLoading]   = useState<string | null>(null);
   const [suspendModalOpen, setSuspendModalOpen] = useState(false);
   const [statusFilter, setStatusFilter]         = useState<StatusFilter>("all");
+  const [newUsersOnly, setNewUsersOnly]         = useState(false);
+  const [copiedKey, setCopiedKey]               = useState<string | null>(null);
   const [banReason, setBanReason]               = useState("");
   const [userGigsMap, setUserGigsMap]             = useState<Record<string, UserGig[]>>({});
   const [gigsLoadingId, setGigsLoadingId]         = useState<string | null>(null);
@@ -583,6 +640,16 @@ export default function UsersPage() {
   const [workedGigsMap, setWorkedGigsMap]         = useState<Record<string, UserGig[]>>({});
   const [workedGigsLoadingId, setWorkedGigsLoadingId] = useState<string | null>(null);
   const [workedGigsModalUser, setWorkedGigsModalUser] = useState<AppUser | null>(null);
+  const [joinedFrom, setJoinedFrom] = useState("");
+  const [joinedTo, setJoinedTo]     = useState("");
+  const [purgeLoading, setPurgeLoading]   = useState(false);
+  const [purgeResult, setPurgeResult]     = useState<{ deleted: { id: string; name: string; email: string }[]; count: number; errors?: { id: string; error: string }[]; error?: string } | null>(null);
+  const [purgeModalOpen, setPurgeModalOpen] = useState(false);
+
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: "", email: "", phone: "", password: "", role: "user", pendingDeletion: false, scheduledDeleteAt: "" });
+  const [createLoading, setCreateLoading] = useState(false);
+  const [createError, setCreateError]     = useState<string | null>(null);
 
   const isSorted = sortField !== null;
 
@@ -801,19 +868,23 @@ export default function UsersPage() {
     if (!targetUser || !adminUser) return;
     setActionLoading("delete");
     try {
-      await deleteDoc(doc(db, "users", targetUser.id));
+      const deleteAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      await updateDoc(doc(db, "users", targetUser.id), {
+        pendingDeletion: true,
+        scheduledDeleteAt: Timestamp.fromDate(deleteAt),
+        updatedAt: serverTimestamp(),
+      });
       await writeLog({
         actorId: adminUser.uid,
         actorName: adminUser.displayName ?? "Unknown",
         actorEmail: adminUser.email ?? "",
         module: "user_management",
-        action: "user_deleted",
-        description: buildDescription.userDeleted(targetUser.name),
+        action: "user_deletion_scheduled",
+        description: buildDescription.userDeletionScheduled(targetUser.name, deleteAt),
         targetId: targetUser.id,
         targetName: targetUser.name,
         affectedFiles: [`users/${targetUser.id}`],
       });
-      setExpandedId(null);
       closeConfirm();
     } catch (err) {
       console.error("[UsersPage] delete error:", err);
@@ -822,15 +893,105 @@ export default function UsersPage() {
     }
   }, [targetUser, adminUser, closeConfirm]);
 
+  const handleCancelDeletion = useCallback(async () => {
+    if (!targetUser || !adminUser) return;
+    setActionLoading("cancel_deletion");
+    try {
+      await updateDoc(doc(db, "users", targetUser.id), {
+        pendingDeletion: false,
+        scheduledDeleteAt: null,
+        updatedAt: serverTimestamp(),
+      });
+      await writeLog({
+        actorId: adminUser.uid,
+        actorName: adminUser.displayName ?? "Unknown",
+        actorEmail: adminUser.email ?? "",
+        module: "user_management",
+        action: "user_deletion_cancelled",
+        description: buildDescription.userDeletionCancelled(targetUser.name),
+        targetId: targetUser.id,
+        targetName: targetUser.name,
+        affectedFiles: [`users/${targetUser.id}`],
+      });
+      closeConfirm();
+    } catch (err) {
+      console.error("[UsersPage] cancel deletion error:", err);
+    } finally {
+      setActionLoading(null);
+    }
+  }, [targetUser, adminUser, closeConfirm]);
+
   // Dispatch confirm to the right handler
   const handleConfirm = useCallback(() => {
     switch (confirmAction) {
-      case "lift":    return handleLiftSuspension();
-      case "ban":     return handleBan();
-      case "unban":   return handleUnban();
-      case "delete":  return handleDelete();
+      case "lift":             return handleLiftSuspension();
+      case "ban":              return handleBan();
+      case "unban":            return handleUnban();
+      case "delete":           return handleDelete();
+      case "cancel_deletion":  return handleCancelDeletion();
     }
-  }, [confirmAction, handleSuspend, handleLiftSuspension, handleBan, handleUnban, handleDelete]);
+  }, [confirmAction, handleSuspend, handleLiftSuspension, handleBan, handleUnban, handleDelete, handleCancelDeletion]);
+
+  const handleCopy = useCallback((key: string, text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((k) => (k === key ? null : k)), 1500);
+    });
+  }, []);
+
+  // ── Manual purge ──────────────────────────────────────────────────────────
+  const handleManualPurge = useCallback(async () => {
+    setPurgeLoading(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch("/api/delete-scheduled-users", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const text = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        console.error("[UsersPage] purge non-JSON response:", text);
+        data = { deleted: [], count: 0, error: `Server error (${res.status}): ${text.slice(0, 200)}` };
+      }
+      setPurgeResult(data);
+      setPurgeModalOpen(true);
+    } catch (err) {
+      console.error("[UsersPage] manual purge error:", err);
+      setPurgeResult({ deleted: [], count: 0, error: "Network error — check server logs." } as any);
+      setPurgeModalOpen(true);
+    } finally {
+      setPurgeLoading(false);
+    }
+  }, []);
+
+  const handleCreateUser = useCallback(async () => {
+    if (!adminUser) return;
+    setCreateLoading(true);
+    setCreateError(null);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) { setCreateError("Not authenticated."); return; }
+      const res = await fetch("/api/admin/create-app-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(createForm),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCreateError(data.error ?? "Failed to create user.");
+        return;
+      }
+      setCreateModalOpen(false);
+      setCreateForm({ name: "", email: "", phone: "", password: "", role: "user" });
+    } catch (err: any) {
+      setCreateError(err.message ?? "Unexpected error.");
+    } finally {
+      setCreateLoading(false);
+    }
+  }, [adminUser, createForm]);
 
   // ── Sort handlers ─────────────────────────────────────────────────────────
   const handleSortField = useCallback((field: SortField) => {
@@ -852,6 +1013,18 @@ export default function UsersPage() {
 
   // ── Filter + sort ─────────────────────────────────────────────────────────
 
+  const sevenDaysAgo = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+
+  const newUsersCount = useMemo(
+    () => users.filter((u) => u.createdAt && u.createdAt.toDate() >= sevenDaysAgo).length,
+    [users, sevenDaysAgo]
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = q
@@ -863,14 +1036,37 @@ export default function UsersPage() {
         )
       : users;
 
+    if (newUsersOnly) {
+      list = list.filter((u) => u.createdAt && u.createdAt.toDate() >= sevenDaysAgo);
+    }
+
+    if (joinedFrom || joinedTo) {
+      list = list.filter((u) => {
+        if (!u.createdAt) return false;
+        const d = u.createdAt.toDate();
+        if (joinedFrom) {
+          const from = new Date(joinedFrom);
+          from.setHours(0, 0, 0, 0);
+          if (d < from) return false;
+        }
+        if (joinedTo) {
+          const to = new Date(joinedTo);
+          to.setHours(23, 59, 59, 999);
+          if (d > to) return false;
+        }
+        return true;
+      });
+    }
+
     if (statusFilter !== "all") {
       list = list.filter((u) => {
         const suspended = isCurrentlySuspended(u);
         switch (statusFilter) {
-          case "online":    return u.isOnline && !u.isBanned && !suspended;
-          case "offline":   return !u.isOnline && !u.isBanned && !suspended;
-          case "suspended": return suspended && !u.isBanned;
-          case "banned":    return u.isBanned;
+          case "online":            return u.isOnline && !u.isBanned && !suspended && !u.pendingDeletion;
+          case "offline":           return !u.isOnline && !u.isBanned && !suspended && !u.pendingDeletion;
+          case "suspended":         return suspended && !u.isBanned && !u.pendingDeletion;
+          case "banned":            return u.isBanned && !u.pendingDeletion;
+          case "pending_deletion":  return u.pendingDeletion;
         }
       });
     }
@@ -882,6 +1078,13 @@ export default function UsersPage() {
           cmp = a.name.localeCompare(b.name);
         } else if (sortField === "balance") {
           cmp = a.balance - b.balance;
+        } else if (sortField === "online") {
+          const onlineCmp = (a.isOnline ? 1 : 0) - (b.isOnline ? 1 : 0);
+          if (onlineCmp !== 0) {
+            cmp = onlineCmp;
+          } else {
+            cmp = (a.lastOnline?.toMillis() ?? 0) - (b.lastOnline?.toMillis() ?? 0);
+          }
         } else {
           const ta = a.createdAt?.toMillis() ?? 0;
           const tb = b.createdAt?.toMillis() ?? 0;
@@ -891,7 +1094,7 @@ export default function UsersPage() {
       });
     }
     return list;
-  }, [users, search, sortField, sortDir, statusFilter]);
+  }, [users, search, sortField, sortDir, statusFilter, newUsersOnly, sevenDaysAgo, joinedFrom, joinedTo]);
 
   // ── Pagination ────────────────────────────────────────────────────────────
   const totalPages  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -925,10 +1128,16 @@ export default function UsersPage() {
       danger: false,
     },
     delete: {
-      title: "Delete User",
-      message: `Permanently delete ${targetUser?.name}'s account? This action cannot be undone.`,
-      label: "Delete",
+      title: "Schedule Deletion",
+      message: `Schedule ${targetUser?.name}'s account for deletion? The account will be permanently deleted in 30 days. You can cancel this during the grace period.`,
+      label: "Schedule Deletion",
       danger: true,
+    },
+    cancel_deletion: {
+      title: "Cancel Deletion",
+      message: `Cancel the scheduled deletion for ${targetUser?.name}? Their account will be restored to normal.`,
+      label: "Cancel Deletion",
+      danger: false,
     },
   };
 
@@ -981,6 +1190,7 @@ export default function UsersPage() {
         .up-table th { padding: 9px 14px; text-align: left; font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; border-bottom: 1px solid var(--border); }
         .up-table tbody tr { border-bottom: 1px solid var(--border-muted); transition: background 0.1s; }
         .up-table tbody tr:last-child { border-bottom: none; }
+        .up-table tbody tr.data-row { cursor: pointer; }
         .up-table tbody tr.data-row:hover { background: var(--bg-elevated); }
         .up-table td { padding: 11px 14px; font-size: 12.5px; color: var(--text-secondary); vertical-align: middle; }
         .up-name { font-weight: 600; color: var(--text-primary); font-size: 13px; }
@@ -990,6 +1200,12 @@ export default function UsersPage() {
         .expand-btn { width: 26px; height: 26px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; }
         .expand-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
         .expand-btn.open { background: var(--blue-dim); border-color: var(--blue); color: var(--blue); }
+
+        /* copy button */
+        .copy-btn { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border: none; background: none; color: var(--text-muted); cursor: pointer; border-radius: 4px; padding: 0; flex-shrink: 0; opacity: 0; transition: opacity 0.15s, color 0.15s; }
+        .copy-btn.copied { color: var(--green); opacity: 1 !important; }
+        tr:hover .copy-btn { opacity: 1; }
+        .copy-btn:hover { color: var(--text-primary); }
 
         /* empty */
         .up-empty { padding: 52px 24px; text-align: center; color: var(--text-muted); font-size: 13px; }
@@ -1023,24 +1239,45 @@ export default function UsersPage() {
                 <span>{filtered.length} result{filtered.length !== 1 ? "s" : ""} for "{search}"</span>
               </div>
             )}
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              {/* <Button
+                variant="primary"
+                size="sm"
+                icon={UserPlus}
+                onClick={() => { setCreateError(null); setCreateModalOpen(true); }}
+              >
+                Create User
+              </Button> */}
+              <Button
+                variant="danger"
+                size="sm"
+                icon={Trash2}
+                loading={purgeLoading}
+                onClick={handleManualPurge}
+              >
+                Run Deletion Now
+              </Button>
+            </div>
           </div>
 
           {/* Status filter bar */}
           <div className="up-filter-bar">
-            {(["all", "online", "offline", "suspended", "banned"] as StatusFilter[]).map((f) => {
+            {(["all", "online", "offline", "suspended", "banned", "pending_deletion"] as StatusFilter[]).map((f) => {
               const counts: Record<StatusFilter, number> = {
-                all:       users.length,
-                online:    users.filter((u) => u.isOnline && !u.isBanned && !isCurrentlySuspended(u)).length,
-                offline:   users.filter((u) => !u.isOnline && !u.isBanned && !isCurrentlySuspended(u)).length,
-                suspended: users.filter((u) => isCurrentlySuspended(u) && !u.isBanned).length,
-                banned:    users.filter((u) => u.isBanned).length,
+                all:              users.length,
+                online:           users.filter((u) => u.isOnline && !u.isBanned && !isCurrentlySuspended(u) && !u.pendingDeletion).length,
+                offline:          users.filter((u) => !u.isOnline && !u.isBanned && !isCurrentlySuspended(u) && !u.pendingDeletion).length,
+                suspended:        users.filter((u) => isCurrentlySuspended(u) && !u.isBanned && !u.pendingDeletion).length,
+                banned:           users.filter((u) => u.isBanned && !u.pendingDeletion).length,
+                pending_deletion: users.filter((u) => u.pendingDeletion).length,
               };
               const labels: Record<StatusFilter, string> = {
                 all: "All", online: "Online", offline: "Offline",
-                suspended: "Suspended", banned: "Banned",
+                suspended: "Suspended", banned: "Banned", pending_deletion: "Pending Deletion",
               };
               const colors: Partial<Record<StatusFilter, string>> = {
                 online: "var(--green)", suspended: "var(--orange)", banned: "var(--red)",
+                pending_deletion: "var(--red)",
               };
               return (
                 <button
@@ -1054,6 +1291,53 @@ export default function UsersPage() {
                 </button>
               );
             })}
+            {/* <div style={{ width: 1, height: 18, background: "var(--border)", margin: "0 4px", flexShrink: 0 }} /> */}
+            {/* <button
+              className={`up-filter-btn${newUsersOnly ? " active" : ""}`}
+              style={newUsersOnly ? { borderColor: "var(--blue)", color: "var(--blue)", background: "var(--blue-dim)" } : undefined}
+              onClick={() => { setNewUsersOnly((v) => !v); setPage(1); }}
+            >
+              New (7d)
+              <span className="up-filter-count">{newUsersCount}</span>
+            </button> */}
+            {/* <div style={{ width: 1, height: 18, background: "var(--border)", margin: "0 4px", flexShrink: 0 }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600, whiteSpace: "nowrap" }}>Joined:</span>
+              <input
+                type="date"
+                value={joinedFrom}
+                max={joinedTo || undefined}
+                onChange={(e) => { setJoinedFrom(e.target.value); setPage(1); }}
+                style={{
+                  padding: "3px 7px", borderRadius: 6, fontSize: 11, fontFamily: "inherit",
+                  border: `1px solid ${joinedFrom ? "var(--blue)" : "var(--border)"}`,
+                  background: joinedFrom ? "var(--blue-dim)" : "var(--bg-elevated)",
+                  color: "var(--text-primary)", outline: "none", cursor: "pointer",
+                }}
+              />
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>→</span>
+              <input
+                type="date"
+                value={joinedTo}
+                min={joinedFrom || undefined}
+                onChange={(e) => { setJoinedTo(e.target.value); setPage(1); }}
+                style={{
+                  padding: "3px 7px", borderRadius: 6, fontSize: 11, fontFamily: "inherit",
+                  border: `1px solid ${joinedTo ? "var(--blue)" : "var(--border)"}`,
+                  background: joinedTo ? "var(--blue-dim)" : "var(--bg-elevated)",
+                  color: "var(--text-primary)", outline: "none", cursor: "pointer",
+                }}
+              />
+              {(joinedFrom || joinedTo) && (
+                <button
+                  onClick={() => { setJoinedFrom(""); setJoinedTo(""); setPage(1); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex", padding: 0 }}
+                  title="Clear date range"
+                >
+                  <X size={11} />
+                </button>
+              )}
+            </div> */}
           </div>
 
           {/* Toolbar */}
@@ -1076,7 +1360,7 @@ export default function UsersPage() {
             </div>
             <div className="up-sort-wrap">
               <span className="up-sort-label">Sort by</span>
-              {(["name", "balance", "createdAt"] as SortField[]).map((f) => (
+              {(["name", "balance", "createdAt", "online"] as SortField[]).map((f) => (
                 <button
                   key={f}
                   className={`up-field-btn${sortField === f ? " active" : ""}`}
@@ -1153,31 +1437,57 @@ export default function UsersPage() {
                     const tier     = getApplicableTier(user.decline_count, suspensionTiers);
                     const isTarget = targetUser?.id === user.id;
 
-                    const statusBadge = user.isBanned
-                      ? <Badge variant="red" dot>Banned</Badge>
-                      : suspended
-                        ? <Badge variant="orange" dot>Suspended</Badge>
-                        : user.isOnline
-                          ? <Badge variant="green" dot>Online</Badge>
-                          : <Badge variant="gray" dot>Offline</Badge>;
+                    const statusBadge = user.pendingDeletion
+                      ? <Badge variant="red" dot>Pending Deletion</Badge>
+                      : user.isBanned
+                        ? <Badge variant="red" dot>Banned</Badge>
+                        : suspended
+                          ? <Badge variant="orange" dot>Suspended</Badge>
+                          : user.isOnline
+                            ? <Badge variant="green" dot>Online</Badge>
+                            : <Badge variant="gray" dot>Offline</Badge>;
 
                     return (
                       <Fragment key={user.id}>
-                        <tr className="data-row">
+                        <tr className="data-row" onClick={() => setExpandedId(isOpen ? null : user.id)}>
                           <td>
-                            <div className="up-name">{user.name}</div>
-                            <div className="up-sub">{user.email}</div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <div className="up-name">{user.name}</div>
+                              <button className={`copy-btn${copiedKey === `${user.id}-name` ? " copied" : ""}`} title="Copy name" onClick={() => handleCopy(`${user.id}-name`, user.name)}>
+                                {copiedKey === `${user.id}-name` ? <Check size={11} /> : <Copy size={11} />}
+                              </button>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <div className="up-sub">{user.email}</div>
+                              <button className={`copy-btn${copiedKey === `${user.id}-email` ? " copied" : ""}`} title="Copy email" onClick={() => handleCopy(`${user.id}-email`, user.email)}>
+                                {copiedKey === `${user.id}-email` ? <Check size={11} /> : <Copy size={11} />}
+                              </button>
+                            </div>
                           </td>
                           <td>
-                            <div className="up-sub" style={{ fontFamily: "monospace", fontSize: "0.75rem" }}>{user.userId}</div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <div className="up-sub" style={{ fontFamily: "monospace", fontSize: "0.75rem" }}>{user.userId}</div>
+                              <button className={`copy-btn${copiedKey === `${user.id}-uid` ? " copied" : ""}`} title="Copy user ID" onClick={() => handleCopy(`${user.id}-uid`, user.userId)}>
+                                {copiedKey === `${user.id}-uid` ? <Check size={11} /> : <Copy size={11} />}
+                              </button>
+                            </div>
                           </td>
-                          <td>{user.phone}</td>
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              {user.phone}
+                              <button className={`copy-btn${copiedKey === `${user.id}-phone` ? " copied" : ""}`} title="Copy phone" onClick={() => handleCopy(`${user.id}-phone`, user.phone)}>
+                                {copiedKey === `${user.id}-phone` ? <Check size={11} /> : <Copy size={11} />}
+                              </button>
+                            </div>
+                          </td>
                           <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>
-                            {formatBalance(user.balance)}
+                            {formatBalance(user.balance, symbol)}
                           </td>
                           <td>{formatDate(user.createdAt)}</td>
-                          <td>{statusBadge}</td>
                           <td>
+                            {statusBadge}
+                          </td>
+                          <td onClick={(e) => e.stopPropagation()}>
                             <button
                               className={`expand-btn${isOpen ? " open" : ""}`}
                               title={isOpen ? "Collapse" : "Expand details"}
@@ -1201,6 +1511,7 @@ export default function UsersPage() {
                             onBan={() => openConfirm("ban", user)}
                             onUnban={() => openConfirm("unban", user)}
                             onDelete={() => openConfirm("delete", user)}
+                            onCancelDeletion={() => openConfirm("cancel_deletion", user)}
                             actionLoading={isTarget ? actionLoading : null}
                             onViewGigs={() => {
                               setGigsModalUser(user);
@@ -1353,7 +1664,7 @@ export default function UsersPage() {
                     <span className={`ug-chip ug-chip--${g.gigType}`}>{GIG_TYPE_LABELS[g.gigType]}</span>
                     <span className={`ug-chip ${statusClass}`}>{statusLabel}</span>
                     <span className="ug-salary">
-                      {g.salary != null && g.salary !== "" ? `₱${g.salary}` : "—"}
+                      {g.salary != null && g.salary !== "" ? `${symbol}${g.salary}` : "—"}
                     </span>
                     <span className="ug-date">
                       {g.createdAt ? g.createdAt.toDate().toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "—"}
@@ -1416,7 +1727,7 @@ export default function UsersPage() {
                     <span className={`ug-chip ug-chip--${g.gigType}`}>{GIG_TYPE_LABELS[g.gigType]}</span>
                     <span className={`ug-chip ${statusClass}`}>{statusLabel}</span>
                     <span className="ug-salary">
-                      {g.salary != null && g.salary !== "" ? `₱${g.salary}` : "—"}
+                      {g.salary != null && g.salary !== "" ? `${symbol}${g.salary}` : "—"}
                     </span>
                     <span className="ug-date">
                       {g.createdAt ? g.createdAt.toDate().toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "—"}
@@ -1424,6 +1735,116 @@ export default function UsersPage() {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* Create User modal */}
+      <Modal
+        open={createModalOpen}
+        onClose={() => { if (!createLoading) { setCreateModalOpen(false); setCreateError(null); } }}
+        title="Create User"
+        description="Add a new app user account"
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setCreateModalOpen(false)} disabled={createLoading}>Cancel</Button>
+            <Button
+              variant="primary" size="sm"
+              loading={createLoading}
+              onClick={handleCreateUser}
+            >
+              Create
+            </Button>
+          </>
+        }
+      >
+        <style>{`
+          .cu-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+          .cu-field:last-child { margin-bottom: 0; }
+          .cu-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+          .cu-input { padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 13px; font-family: inherit; outline: none; transition: border-color 0.15s; width: 100%; box-sizing: border-box; }
+          .cu-input:focus { border-color: var(--blue); }
+          .cu-error { font-size: 12px; color: var(--red); padding: 8px 10px; border-radius: var(--radius-sm); background: var(--red-dim); border: 1px solid rgba(239,68,68,0.25); margin-bottom: 14px; }
+        `}</style>
+        {createError && <div className="cu-error">{createError}</div>}
+        <div className="cu-field">
+          <label className="cu-label">Full Name</label>
+          <input className="cu-input" placeholder="e.g. Juan dela Cruz" value={createForm.name} onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))} />
+        </div>
+        <div className="cu-field">
+          <label className="cu-label">Email</label>
+          <input className="cu-input" type="email" placeholder="user@example.com" value={createForm.email} onChange={(e) => setCreateForm((f) => ({ ...f, email: e.target.value }))} />
+        </div>
+        <div className="cu-field">
+          <label className="cu-label">Phone</label>
+          <input className="cu-input" placeholder="+63 912 345 6789" value={createForm.phone} onChange={(e) => setCreateForm((f) => ({ ...f, phone: e.target.value }))} />
+        </div>
+        <div className="cu-field">
+          <label className="cu-label">Password</label>
+          <input className="cu-input" type="password" placeholder="Min. 6 characters" value={createForm.password} onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))} />
+        </div>
+        <div className="cu-field">
+          <label className="cu-label">Role</label>
+          <select className="cu-input" value={createForm.role} onChange={(e) => setCreateForm((f) => ({ ...f, role: e.target.value }))}>
+            <option value="user">User</option>
+            <option value="worker">Worker</option>
+          </select>
+        </div>
+        <div className="cu-field">
+          <label className="cu-label">Scheduled Delete At</label>
+          <input className="cu-input" type="datetime-local" value={createForm.scheduledDeleteAt} onChange={(e) => setCreateForm((f) => ({ ...f, scheduledDeleteAt: e.target.value, pendingDeletion: e.target.value ? true : f.pendingDeletion }))} />
+        </div>
+        <div className="cu-field" style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <input
+            type="checkbox"
+            id="cu-pending-deletion"
+            checked={createForm.pendingDeletion}
+            onChange={(e) => setCreateForm((f) => ({ ...f, pendingDeletion: e.target.checked }))}
+            style={{ width: 15, height: 15, cursor: "pointer", accentColor: "var(--red)" }}
+          />
+          <label htmlFor="cu-pending-deletion" className="cu-label" style={{ marginBottom: 0, cursor: "pointer" }}>Pending Deletion</label>
+        </div>
+      </Modal>
+
+      {/* Purge result modal */}
+      {purgeModalOpen && purgeResult && (
+        <Modal
+          open
+          onClose={() => { setPurgeModalOpen(false); setPurgeResult(null); }}
+          title="Deletion Run Complete"
+          description={`${purgeResult.count} account${purgeResult.count !== 1 ? "s" : ""} deleted today`}
+          size="md"
+        >
+          <style>{`
+            .purge-list { display: flex; flex-direction: column; gap: 6px; }
+            .purge-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elevated); }
+            .purge-name { font-size: 13px; font-weight: 600; color: var(--text-primary); flex: 1; }
+            .purge-email { font-size: 11px; color: var(--text-muted); }
+            .purge-empty { padding: 28px 0; text-align: center; color: var(--text-muted); font-size: 13px; }
+            .purge-error { padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(239,68,68,0.3); background: var(--red-dim); font-size: 12px; color: var(--red); margin-top: 10px; }
+          `}</style>
+          {purgeResult.error ? (
+            <div className="purge-error">{purgeResult.error}</div>
+          ) : purgeResult.count === 0 ? (
+            <div className="purge-empty">No accounts were scheduled for deletion today.</div>
+          ) : (
+            <div className="purge-list">
+              {purgeResult.deleted.map((u) => (
+                <div key={u.id} className="purge-row">
+                  <CheckCircle size={14} style={{ color: "var(--green)", flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <div className="purge-name">{u.name}</div>
+                    <div className="purge-email">{u.email}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {purgeResult.errors && purgeResult.errors.length > 0 && (
+            <div className="purge-error">
+              {purgeResult.errors.length} deletion{purgeResult.errors.length !== 1 ? "s" : ""} failed — check server logs.
             </div>
           )}
         </Modal>

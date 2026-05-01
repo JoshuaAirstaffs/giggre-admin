@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   LayoutDashboard, Users, Briefcase, Shield, BarChart2,
   Settings, LogOut, ChevronLeft, ChevronRight, Activity,
-  Map, Library, MegaphoneIcon, File,
+  Map, Library, MegaphoneIcon, File, BadgeCheck,
   LucideIcon,
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
@@ -33,6 +33,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/support",       icon: BarChart2,       label: "Support",       module: "reports" },
   { href: "/settings",      icon: Settings,        label: "Settings",      module: "settings" },
   { href: "/content-management",      icon: File,        label: "Content Management",      module: "content-management" },
+  { href: "/verification",            icon: BadgeCheck,  label: "Verification",            module: "verification" },
 ];
 
 const LIBRARY_ITEMS: NavItem[] = [

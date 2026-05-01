@@ -10,7 +10,8 @@ export type ModuleKey =
   | "library-gsin"
   | "quick-gigs"
   | "activity-logs"
-  | "content-management";
+  | "content-management"
+  | "verification";
 
 export interface ModuleMeta {
   key: ModuleKey;
@@ -33,6 +34,7 @@ export const ALL_MODULES: ModuleMeta[] = [
   { key: "quick-gigs",         label: "Quick Gigs Configuration",  href: "/quick-gigs" },
   { key: "activity-logs",      label: "Activity Logs",           href: "/activity-logs" },
   { key: "content-management", label: "Content Management",      href: "/content-management" },
+  { key: "verification",       label: "Verification Requests",   href: "/verification" },
 ];
 
 /** Modules regular admins can be granted access to (super_admin always has all) */
