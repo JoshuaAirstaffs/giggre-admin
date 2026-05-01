@@ -985,7 +985,7 @@ export default function UsersPage() {
         return;
       }
       setCreateModalOpen(false);
-      setCreateForm({ name: "", email: "", phone: "", password: "", role: "user" });
+      setCreateForm({ name: "", email: "", phone: "", password: "", role: "user", pendingDeletion: false, scheduledDeleteAt: "" });
     } catch (err: any) {
       setCreateError(err.message ?? "Unexpected error.");
     } finally {
