@@ -62,7 +62,9 @@ export type UserRequestLogAction =
 
 export type VerificationLogAction =
   | "verification_verified"
-  | "verification_rejected";
+  | "verification_rejected"
+  | "verification_note"
+  | "verification_created";
 
 export type LogAction =
   | AdminLogAction
