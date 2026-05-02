@@ -24,7 +24,7 @@ import {
   Search, RefreshCw, BadgeCheck, XCircle, Clock,
   User, Phone, Mail, Hash, Image as ImageIcon, AlertTriangle,
   CheckCircle, Plus, UserSearch, Send, FileText,
-  ChevronLeft, ChevronRight, Bell, MessageSquare,
+  ChevronLeft, ChevronRight, Bell, MessageSquare, Copy,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -157,6 +157,14 @@ export default function VerificationPage() {
   const [userSearch, setUserSearch] = useState("");
   const [pickedUser, setPickedUser] = useState<PickedUser | null>(null);
   const [creating, setCreating] = useState(false);
+
+  // ── Copy feedback ─────────────────────────────────────────────────────────
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 1500);
+  };
 
   // ── Page-level tab ────────────────────────────────────────────────────────
   const [activePageTab, setActivePageTab] = useState<"requests" | "send_notification">("requests");
@@ -1014,8 +1022,38 @@ export default function VerificationPage() {
                     }}
                   >
                     <td>
-                      <div className="vr-name">{r.name || "—"}</div>
-                      <div className="vr-sub" style={{ fontFamily: "monospace" }}>{r.userId}</div>
+                      <div className="vr-name" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        {r.name || "—"}
+                        {r.name && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); copyToClipboard(r.name, `${r.id}-name`); }}
+                            title="Copy name"
+                            style={{
+                              background: "none", border: "none", cursor: "pointer", padding: "1px 3px",
+                              color: copiedKey === `${r.id}-name` ? "var(--green)" : "var(--text-muted)",
+                              display: "flex", alignItems: "center", borderRadius: 3,
+                              transition: "color 0.15s",
+                            }}
+                          >
+                            <Copy size={10} />
+                          </button>
+                        )}
+                      </div>
+                      <div className="vr-sub" style={{ fontFamily: "monospace", display: "flex", alignItems: "center", gap: 4 }}>
+                        {r.userId}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); copyToClipboard(r.userId, `${r.id}-uid`); }}
+                          title="Copy user ID"
+                          style={{
+                            background: "none", border: "none", cursor: "pointer", padding: "1px 3px",
+                            color: copiedKey === `${r.id}-uid` ? "var(--green)" : "var(--text-muted)",
+                            display: "flex", alignItems: "center", borderRadius: 3,
+                            transition: "color 0.15s",
+                          }}
+                        >
+                          <Copy size={10} />
+                        </button>
+                      </div>
                     </td>
                     <td>
                       <div>{r.email}</div>
@@ -1431,7 +1469,7 @@ export default function VerificationPage() {
                 )}
               </div>
             )}
-            {notifUser && (
+            {/* {notifUser && (
               <div className="vr-picked-preview">
                 <div className="vr-user-avatar">
                   {notifUser.photoUrl ? <img src={notifUser.photoUrl} alt={notifUser.name} /> : <User size={16} />}
@@ -1441,7 +1479,7 @@ export default function VerificationPage() {
                   <div className="vr-picked-meta">{notifUser.email}{notifUser.phone ? ` · ${notifUser.phone}` : ""}</div>
                 </div>
               </div>
-            )}
+            )} */}
           </div>
 
           {/* Step 2: pick message */}
