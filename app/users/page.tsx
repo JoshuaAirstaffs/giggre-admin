@@ -97,6 +97,7 @@ interface AppUser {
   isBanned: boolean;
   pendingDeletion: boolean;
   scheduledDeleteAt: Timestamp | null;
+  isVerified: string | null;
   // Additional stats
   quickGigDailyDeclineCount: number;
   quickGigTotalDeclines: number;
@@ -107,7 +108,7 @@ interface AppUser {
 
 type SortField = "createdAt" | "balance" | "name" | "online";
 type SortDir = "asc" | "desc";
-type StatusFilter = "all" | "online" | "offline" | "suspended" | "banned" | "pending_deletion";
+type StatusFilter = "all" | "online" | "offline" | "suspended" | "banned" | "pending_deletion" | "verified" | "unverified";
 
 const SORT_LABELS: Record<SortField, { label: string; asc: string; desc: string }> = {
   name:      { label: "Name",    asc: "A → Z",        desc: "Z → A"        },
@@ -207,6 +208,7 @@ function toUser(id: string, d: Record<string, any>): AppUser {
     totalGigs:                 typeof d.totalGigs                 === "number" ? d.totalGigs                 : 0,
     lastOnline:  d.lastOnline instanceof Timestamp ? d.lastOnline : null,
     ban_reason:  typeof d.ban_reason === "string" ? d.ban_reason : null,
+    isVerified:  typeof d.isVerified === "string" ? d.isVerified : null,
   };
 }
 
@@ -1067,6 +1069,8 @@ export default function UsersPage() {
           case "suspended":         return suspended && !u.isBanned && !u.pendingDeletion;
           case "banned":            return u.isBanned && !u.pendingDeletion;
           case "pending_deletion":  return u.pendingDeletion;
+          case "verified":          return u.isVerified === "verified";
+          case "unverified":        return u.isVerified !== "verified";
         }
       });
     }
@@ -1262,7 +1266,7 @@ export default function UsersPage() {
 
           {/* Status filter bar */}
           <div className="up-filter-bar">
-            {(["all", "online", "offline", "suspended", "banned", "pending_deletion"] as StatusFilter[]).map((f) => {
+            {(["all", "online", "offline", "suspended", "banned", "pending_deletion", "verified", "unverified"] as StatusFilter[]).map((f) => {
               const counts: Record<StatusFilter, number> = {
                 all:              users.length,
                 online:           users.filter((u) => u.isOnline && !u.isBanned && !isCurrentlySuspended(u) && !u.pendingDeletion).length,
@@ -1270,14 +1274,17 @@ export default function UsersPage() {
                 suspended:        users.filter((u) => isCurrentlySuspended(u) && !u.isBanned && !u.pendingDeletion).length,
                 banned:           users.filter((u) => u.isBanned && !u.pendingDeletion).length,
                 pending_deletion: users.filter((u) => u.pendingDeletion).length,
+                verified:         users.filter((u) => u.isVerified === "verified").length,
+                unverified:       users.filter((u) => u.isVerified !== "verified").length,
               };
               const labels: Record<StatusFilter, string> = {
                 all: "All", online: "Online", offline: "Offline",
                 suspended: "Suspended", banned: "Banned", pending_deletion: "Pending Deletion",
+                verified: "Verified", unverified: "Unverified",
               };
               const colors: Partial<Record<StatusFilter, string>> = {
                 online: "var(--green)", suspended: "var(--orange)", banned: "var(--red)",
-                pending_deletion: "var(--red)",
+                pending_deletion: "var(--red)", verified: "var(--blue)", unverified: "var(--text-muted)",
               };
               return (
                 <button
@@ -1453,6 +1460,17 @@ export default function UsersPage() {
                           <td>
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                               <div className="up-name">{user.name}</div>
+                              {/* {user.isVerified === "verified" ? (
+                                <span title="Verified" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 700, color: "var(--blue)", background: "var(--blue-dim)", borderRadius: 20, padding: "1px 6px", whiteSpace: "nowrap" }}>
+                                  <CheckCircle size={10} />
+                                  Verified
+                                </span>
+                              ) : (
+                                <span title="Unverified" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 700, color: "var(--text-muted)", background: "var(--bg-elevated)", borderRadius: 20, padding: "1px 6px", whiteSpace: "nowrap", border: "1px solid var(--border)" }}>
+                                  <ShieldOff size={10} />
+                                  Unverified
+                                </span>
+                              )} */}
                               <button className={`copy-btn${copiedKey === `${user.id}-name` ? " copied" : ""}`} title="Copy name" onClick={() => handleCopy(`${user.id}-name`, user.name)}>
                                 {copiedKey === `${user.id}-name` ? <Check size={11} /> : <Copy size={11} />}
                               </button>

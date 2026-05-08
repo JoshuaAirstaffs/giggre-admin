@@ -64,7 +64,9 @@ export type VerificationLogAction =
   | "verification_verified"
   | "verification_rejected"
   | "verification_note"
-  | "verification_created";
+  | "verification_created"
+  | "verification_document_viewed"
+  | "verification_document_downloaded";
 
 export type LogAction =
   | AdminLogAction

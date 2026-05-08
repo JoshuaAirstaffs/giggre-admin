@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import JSZip from "jszip";
 import AdminLayout from "@/components/layout/AdminLayout";
 import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
@@ -18,13 +19,15 @@ import {
   orderBy,
   where,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, storage } from "@/lib/firebase";
+import { ref, getBlob, getMetadata } from "firebase/storage";
 import { writeLog } from "@/lib/activitylog";
 import {
-  Search, RefreshCw, BadgeCheck, XCircle, Clock,
+  Search, RefreshCw, BadgeCheck, XCircle, Clock, X,
   User, Phone, Mail, Hash, Image as ImageIcon, AlertTriangle,
   CheckCircle, Plus, UserSearch, Send, FileText,
   ChevronLeft, ChevronRight, Bell, MessageSquare, Copy,
+  ZoomIn, ZoomOut, RotateCcw, RotateCw, Maximize2,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -37,6 +40,14 @@ interface PickedUser {
   photoUrl: string;
 }
 
+interface VerificationDocument {
+  category: string;
+  name: string;
+  storagePath: string;
+  url: string;
+  uploadedAt: Timestamp | null;
+}
+
 interface VerificationRequest {
   id: string;
   userId: string;
@@ -44,12 +55,14 @@ interface VerificationRequest {
   email: string;
   phone: string;
   photoUrl: string;
-  status: "pending" | "verified" | "rejected";
+  documents: VerificationDocument[];
+  status: "pending" | "verified" | "rejected" | "cancelled";
   attemptCount: number;
   submittedAt: Timestamp | null;
   reviewedAt: Timestamp | null;
   reviewedBy: string | null;
   rejectReason: string | null;
+  updatedAt: Timestamp | null;
 }
 
 interface TimelineEntry {
@@ -57,9 +70,28 @@ interface TimelineEntry {
   actorName: string;
   date: Date | null;
   description?: string;
+  lastViewedAt?: Date | null;
+  viewCount?: number;
+  lastDownloadedAt?: Date | null;
+  downloadCount?: number;
+  documentName?: string;
+  storagePath?: string;
 }
 
-type StatusFilter = "all" | "pending" | "verified" | "rejected";
+type StatusFilter = "all" | "pending" | "verified" | "rejected" | "cancelled";
+
+interface NotificationDoc {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  message: string;
+  category: string;
+  verification_status: string;
+  read: boolean;
+  createdAt: Timestamp | null;
+  createdBy: string;
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -69,7 +101,9 @@ const TIMELINE_CONFIG: Record<string, { label: string; color: string; glow: stri
   verification_created: { label: "Submitted", color: "var(--blue)", glow: "rgba(59,130,246,0.18)" },
   verification_verified: { label: "Verified", color: "var(--green)", glow: "rgba(34,197,94,0.18)" },
   verification_rejected: { label: "Rejected", color: "var(--red)", glow: "rgba(239,68,68,0.18)" },
-  verification_note: { label: "Note", color: "var(--text-secondary)", glow: "rgba(100,116,139,0.18)" },
+  verification_note: { label: "Verification Notification", color: "var(--text-secondary)", glow: "rgba(100,116,139,0.18)" },
+  verification_document_viewed: { label: "Viewed Document", color: "var(--text-muted)", glow: "rgba(100,116,139,0.12)" },
+  // verification_document_downloaded: hidden for now
 };
 
 const NOTIF_PRESETS = [
@@ -123,6 +157,174 @@ const STATUS_BADGE: Record<string, { icon: React.ReactNode }> = {
   rejected: { icon: <XCircle size={12} /> },
 };
 
+// ─── Doc Viewer Modal ─────────────────────────────────────────────────────────
+
+function getDocType(filename: string): "image" | "pdf" | "other" {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  if (["jpg", "jpeg", "png", "gif", "webp", "bmp"].includes(ext)) return "image";
+  if (ext === "pdf") return "pdf";
+  return "other";
+}
+
+function DocViewerModal({ doc, onClose }: { doc: VerificationDocument | null; onClose: () => void }) {
+  const [zoom, setZoom] = useState(1);
+  const [rotate, setRotate] = useState(0);
+
+  // Reset transform whenever a new doc is opened
+  useEffect(() => { setZoom(1); setRotate(0); }, [doc]);
+
+  if (!doc) return null;
+  const type = getDocType(doc.name);
+  const displayName = doc.name.replace(/[<>"'&]/g, "");
+  const categoryLabel = doc.category.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+  const zoomIn  = () => setZoom((z) => Math.min(+(z + 0.25).toFixed(2), 4));
+  const zoomOut = () => setZoom((z) => Math.max(+(z - 0.25).toFixed(2), 0.25));
+  const reset   = () => { setZoom(1); setRotate(0); };
+
+  const onWheel = (e: React.WheelEvent) => {
+    if (type !== "image") return;
+    e.preventDefault();
+    e.deltaY < 0 ? zoomIn() : zoomOut();
+  };
+
+  const ctrlBtn = (onClick: () => void, title: string, children: React.ReactNode, disabled = false) => (
+    <button
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      style={{
+        width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+        borderRadius: 6, border: "1px solid var(--border)", background: "transparent",
+        color: disabled ? "var(--text-muted)" : "var(--text-secondary)",
+        cursor: disabled ? "not-allowed" : "pointer", transition: "all 0.15s", opacity: disabled ? 0.4 : 1,
+      }}
+    >
+      {children}
+    </button>
+  );
+
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, zIndex: 2000,
+        background: "rgba(0,0,0,0.82)", backdropFilter: "blur(6px)",
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        padding: 24,
+      }}
+      onClick={onClose}
+    >
+      <style>{`
+        .dv-box { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px;
+          display: flex; flex-direction: column; max-height: 92vh; width: 100%; max-width: 820px;
+          overflow: hidden; }
+        .dv-header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+          padding: 14px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+        .dv-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+        .dv-category { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+        .dv-actions { display: flex; gap: 8px; align-items: center; }
+        .dv-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 18px;
+          border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--bg-elevated); }
+        .dv-zoom-label { font-size: 12px; color: var(--text-muted); min-width: 38px; text-align: center; }
+        .dv-divider { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+        .dv-body { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center;
+          background: var(--bg-base); min-height: 320px; }
+        .dv-other { display: flex; flex-direction: column; align-items: center; justify-content: center;
+          gap: 12px; padding: 48px; text-align: center; }
+        .dv-other-icon { color: var(--text-muted); opacity: 0.5; }
+        .dv-other-name { font-size: 14px; color: var(--text-secondary); word-break: break-all; }
+        .dv-other-note { font-size: 12px; color: var(--text-muted); }
+        .dv-close { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+          border-radius: 6px; color: var(--text-muted); cursor: pointer; transition: all 0.15s; border: none;
+          background: transparent; }
+        .dv-close:hover { background: var(--bg-elevated); color: var(--text-primary); }
+        .dv-open-btn { font-size: 12px; color: var(--text-muted); text-decoration: none; padding: 4px 8px;
+          border-radius: 5px; border: 1px solid var(--border); transition: all 0.15s; }
+        .dv-open-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+      `}</style>
+      <div className="dv-box" onClick={(e) => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="dv-header">
+          <div>
+            <div className="dv-title">{displayName}</div>
+            <div className="dv-category">{categoryLabel}</div>
+          </div>
+          <div className="dv-actions">
+            <a href={doc.url} target="_blank" rel="noreferrer noopener" className="dv-open-btn">
+              Open in new tab ↗
+            </a>
+            <button className="dv-close" onClick={onClose} aria-label="Close">
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+
+        {/* Zoom / Rotate toolbar — images only */}
+        {type === "image" && (
+          <div className="dv-toolbar">
+            {ctrlBtn(zoomOut, "Zoom out", <ZoomOut size={13} />, zoom <= 0.25)}
+            <span className="dv-zoom-label">{Math.round(zoom * 100)}%</span>
+            {ctrlBtn(zoomIn,  "Zoom in",  <ZoomIn  size={13} />, zoom >= 4)}
+            <div className="dv-divider" />
+            {ctrlBtn(() => setRotate((r) => (r - 90 + 360) % 360), "Rotate left",  <RotateCcw size={13} />)}
+            {ctrlBtn(() => setRotate((r) => (r + 90) % 360),       "Rotate right", <RotateCw  size={13} />)}
+            <div className="dv-divider" />
+            {ctrlBtn(reset, "Reset", <Maximize2 size={13} />, zoom === 1 && rotate === 0)}
+          </div>
+        )}
+
+        {/* Body */}
+        <div className="dv-body" onWheel={onWheel}>
+          {type === "image" && (
+            <div style={{ padding: 16, display: "flex", alignItems: "center", justifyContent: "center", minWidth: "100%", minHeight: "100%" }}>
+              <img
+                src={doc.url}
+                alt={displayName}
+                style={{
+                  maxWidth: zoom <= 1 ? "100%" : "none",
+                  maxHeight: zoom <= 1 ? "70vh" : "none",
+                  transform: `rotate(${rotate}deg) scale(${zoom})`,
+                  transformOrigin: "center center",
+                  transition: "transform 0.15s ease",
+                  borderRadius: 6,
+                  display: "block",
+                }}
+              />
+            </div>
+          )}
+          {type === "pdf" && (
+            <iframe
+              src={doc.url}
+              title={displayName}
+              sandbox="allow-scripts allow-same-origin"
+              style={{ width: "100%", height: "75vh", border: "none" }}
+            />
+          )}
+          {type === "other" && (
+            <div className="dv-other">
+              <FileText size={48} className="dv-other-icon" />
+              <div className="dv-other-name">{displayName}</div>
+              <div className="dv-other-note">This file type cannot be previewed in the browser.</div>
+              <a
+                href={doc.url}
+                download={displayName}
+                rel="noreferrer noopener"
+                style={{
+                  fontSize: 13, padding: "7px 16px", borderRadius: 7,
+                  background: "var(--blue)", color: "#fff", textDecoration: "none",
+                }}
+              >
+                Download file
+              </a>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function VerificationPage() {
@@ -135,6 +337,9 @@ export default function VerificationPage() {
   // ── Filters & pagination ──────────────────────────────────────────────────
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
+  const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
 
   // ── Detail / review modal ─────────────────────────────────────────────────
@@ -158,6 +363,65 @@ export default function VerificationPage() {
   const [pickedUser, setPickedUser] = useState<PickedUser | null>(null);
   const [creating, setCreating] = useState(false);
 
+  // ── Document viewer ───────────────────────────────────────────────────────
+  const [docViewer, setDocViewer] = useState<VerificationDocument | null>(null);
+  const [missingDocs, setMissingDocs] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!selected?.documents?.length) { setMissingDocs(new Set()); return; }
+    setMissingDocs(new Set());
+    selected.documents.forEach(async (d) => {
+      try {
+        await getMetadata(ref(storage, d.storagePath));
+      } catch {
+        setMissingDocs((prev) => new Set(prev).add(d.storagePath));
+      }
+    });
+  }, [selected]);
+  const [downloadingAll, setDownloadingAll] = useState(false);
+  const [downloadResult, setDownloadResult] = useState<{
+    success: string[];
+    failed: string[];
+  } | null>(null);
+
+  const handleDownloadAll = useCallback(async (docs: VerificationDocument[], req: VerificationRequest) => {
+    if (!docs.length) return;
+    setDownloadingAll(true);
+    const success: string[] = [];
+    const failed: string[] = [];
+    const successDocs: VerificationDocument[] = [];
+    try {
+      const zip = new JSZip();
+      await Promise.all(
+        docs.map(async (d) => {
+          try {
+            const blob = await getBlob(ref(storage, d.storagePath));
+            zip.file(d.name, blob);
+            success.push(d.name);
+            successDocs.push(d);
+          } catch {
+            failed.push(d.name);
+          }
+        })
+      );
+      if (success.length > 0) {
+        const content = await zip.generateAsync({ type: "blob" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(content);
+        a.download = `${req.name.replace(/\s+/g, "_")}_documents.zip`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+      setDownloadResult({ success, failed });
+      if (user && successDocs.length > 0) {
+        await Promise.all(successDocs.map((d) => logDocumentDownload(d, req)));
+        setTimelineKey((k) => k + 1);
+      }
+    } finally {
+      setDownloadingAll(false);
+    }
+  }, [user]);
+
   // ── Copy feedback ─────────────────────────────────────────────────────────
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const copyToClipboard = (text: string, key: string) => {
@@ -167,7 +431,16 @@ export default function VerificationPage() {
   };
 
   // ── Page-level tab ────────────────────────────────────────────────────────
-  const [activePageTab, setActivePageTab] = useState<"requests" | "send_notification">("requests");
+  const [activePageTab, setActivePageTab] = useState<"notifications" | "requests" | "send_notification">("requests");
+
+  // ── Notifications list ────────────────────────────────────────────────────
+  const [notifDocs, setNotifDocs] = useState<NotificationDoc[]>([]);
+  const [notifDocsLoading, setNotifDocsLoading] = useState(true);
+  const [notifStatusFilter, setNotifStatusFilter] = useState<"all" | "pending" | "verified" | "unverified">("all");
+  const [notifSearch, setNotifSearch] = useState("");
+  const [notifSortOrder, setNotifSortOrder] = useState<"newest" | "oldest">("newest");
+  const [notifDateFrom, setNotifDateFrom] = useState("");
+  const [notifDateTo, setNotifDateTo] = useState("");
 
   // ── Send notification form ────────────────────────────────────────────────
   const [notifUserSearch, setNotifUserSearch] = useState("");
@@ -194,15 +467,42 @@ export default function VerificationPage() {
         email: d.data().email ?? "",
         phone: d.data().phone ?? "",
         photoUrl: d.data().photoUrl ?? "",
+        documents: d.data().documents ?? [],
         status: d.data().status ?? "pending",
         attemptCount: d.data().attemptCount ?? 1,
         submittedAt: d.data().submittedAt ?? null,
         reviewedAt: d.data().reviewedAt ?? null,
         reviewedBy: d.data().reviewedBy ?? null,
         rejectReason: d.data().rejectReason ?? null,
+        updatedAt: d.data().updatedAt ?? null,
       }));
       setRequests(data);
       setLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  // ─── Notifications listener ───────────────────────────────────────────────
+
+  useEffect(() => {
+    const q = query(
+      collection(db, "notifications"),
+      where("category", "==", "account_verification")
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      setNotifDocs(snap.docs.map((d) => ({
+        id: d.id,
+        userId: d.data().userId ?? "",
+        userName: d.data().userName ?? "",
+        userEmail: d.data().userEmail ?? "",
+        message: d.data().message ?? "",
+        category: d.data().category ?? "",
+        verification_status: d.data().verification_status ?? "",
+        read: d.data().read ?? false,
+        createdAt: d.data().createdAt ?? null,
+        createdBy: d.data().createdBy ?? "",
+      })).sort((a, b) => (b.createdAt?.toMillis() ?? 0) - (a.createdAt?.toMillis() ?? 0)));
+      setNotifDocsLoading(false);
     });
     return () => unsub();
   }, []);
@@ -219,7 +519,7 @@ export default function VerificationPage() {
         where("module", "==", "verification"),
       )
     ).then((snap) => {
-      const entries: TimelineEntry[] = snap.docs
+      const rawEntries = snap.docs
         .map((d) => {
           const data = d.data();
           return {
@@ -227,10 +527,57 @@ export default function VerificationPage() {
             actorName: data.actorName ?? "Unknown",
             date: data.createdAt?.toDate?.() ?? null,
             description: data.description ?? undefined,
+            lastViewedAt: data.meta?.other?.lastViewedAt?.toDate?.() ?? null,
+            viewCount: data.meta?.other?.viewCount ?? 1,
+            lastDownloadedAt: data.meta?.other?.lastDownloadedAt?.toDate?.() ?? null,
+            downloadCount: data.meta?.other?.downloadCount ?? 1,
+            documentName: data.meta?.other?.documentName ?? undefined,
+            storagePath: data.meta?.other?.storagePath ?? undefined,
           };
         })
-        .filter((e) => e.action in TIMELINE_CONFIG)
-        .sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
+        .filter((e) => e.action in TIMELINE_CONFIG);
+
+      // Merge view/download entries for the same document into one timeline entry each
+      const viewMap = new Map<string, TimelineEntry>();
+      const downloadMap = new Map<string, TimelineEntry>();
+      const nonGroupedEntries: TimelineEntry[] = [];
+
+      for (const e of rawEntries) {
+        if (e.action === "verification_document_viewed") {
+          const key = e.storagePath ?? e.documentName ?? e.description ?? "unknown";
+          const existing = viewMap.get(key);
+          if (!existing) {
+            viewMap.set(key, { ...e });
+          } else {
+            if (e.date && (!existing.date || e.date < existing.date)) existing.date = e.date;
+            const eLatest = e.lastViewedAt ?? e.date;
+            const exLatest = existing.lastViewedAt ?? existing.date;
+            if (eLatest && (!exLatest || eLatest > exLatest)) existing.lastViewedAt = eLatest;
+            existing.viewCount = (existing.viewCount ?? 1) + (e.viewCount ?? 1);
+          }
+        } else if (e.action === "verification_document_downloaded") {
+          const key = e.storagePath ?? e.documentName ?? e.description ?? "unknown";
+          const existing = downloadMap.get(key);
+          if (!existing) {
+            downloadMap.set(key, { ...e });
+          } else {
+            if (e.date && (!existing.date || e.date < existing.date)) existing.date = e.date;
+            const eLatest = e.lastDownloadedAt ?? e.date;
+            const exLatest = existing.lastDownloadedAt ?? existing.date;
+            if (eLatest && (!exLatest || eLatest > exLatest)) existing.lastDownloadedAt = eLatest;
+            existing.downloadCount = (existing.downloadCount ?? 1) + (e.downloadCount ?? 1);
+          }
+        } else {
+          nonGroupedEntries.push(e);
+        }
+      }
+
+      const entries: TimelineEntry[] = [
+        ...nonGroupedEntries,
+        ...Array.from(viewMap.values()),
+        ...Array.from(downloadMap.values()),
+      ].sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
+
       setTimeline(entries);
     })
       .catch(() => setTimeline([]))
@@ -243,22 +590,129 @@ export default function VerificationPage() {
     if (!selected || !user || !noteText.trim()) return;
     setAddingNote(true);
     try {
-      await writeLog({
-        actorId: user.uid,
-        actorName: user.displayName ?? "Admin",
-        actorEmail: user.email ?? undefined,
-        module: "verification",
-        action: "verification_note",
-        description: noteText.trim(),
-        targetId: selected.userId,
-        targetName: selected.name,
-      });
+      await Promise.all([
+        writeLog({
+          actorId: user.uid,
+          actorName: user.displayName ?? "Admin",
+          actorEmail: user.email ?? undefined,
+          module: "verification",
+          action: "verification_note",
+          description: noteText.trim(),
+          targetId: selected.userId,
+          targetName: selected.name,
+        }),
+        updateDoc(doc(db, "verification_requests", selected.id), {
+          updatedAt: serverTimestamp(),
+        }),
+      ]);
       setNoteText("");
       setTimelineKey((k) => k + 1);
     } finally {
       setAddingNote(false);
     }
   }, [selected, user, noteText]);
+
+  // ─── Log document view (upsert — one entry per admin per document) ───────
+
+  const logDocumentView = useCallback(async (viewedDoc: VerificationDocument, req: VerificationRequest) => {
+    if (!user) return;
+    try {
+      // Only use targetId + module — this index already exists from the timeline query
+      const snap = await getDocs(query(
+        collection(db, "activityLogs"),
+        where("targetId", "==", req.userId),
+        where("module", "==", "verification"),
+      ));
+      const existing = snap.docs.find(
+        (d) =>
+          d.data().action === "verification_document_viewed" &&
+          d.data().actorId === user.uid &&
+          d.data().meta?.other?.storagePath === viewedDoc.storagePath
+      );
+      if (existing) {
+        const prev = existing.data().meta?.other?.viewCount ?? 1;
+        await updateDoc(doc(db, "activityLogs", existing.id), {
+          "meta.other.lastViewedAt": serverTimestamp(),
+          "meta.other.viewCount": prev + 1,
+        });
+      } else {
+        await addDoc(collection(db, "activityLogs"), {
+          actorId: user.uid,
+          actorName: user.displayName ?? "Admin",
+          actorEmail: user.email ?? null,
+          module: "verification",
+          action: "verification_document_viewed",
+          description: `Viewed document "${viewedDoc.name}" (${viewedDoc.category})`,
+          targetId: req.userId,
+          targetName: req.name,
+          affectedFiles: [],
+          meta: {
+            from: null, to: null,
+            other: {
+              documentName: viewedDoc.name,
+              storagePath: viewedDoc.storagePath,
+              viewCount: 1,
+              lastViewedAt: null,
+            },
+          },
+          createdAt: serverTimestamp(),
+        });
+      }
+      setTimelineKey((k) => k + 1);
+    } catch (err) {
+      console.warn("[logDocumentView] failed:", err);
+    }
+  }, [user]);
+
+  // ─── Log document download (upsert — one entry per admin per document) ──
+
+  const logDocumentDownload = useCallback(async (downloadedDoc: VerificationDocument, req: VerificationRequest) => {
+    if (!user) return;
+    try {
+      const snap = await getDocs(query(
+        collection(db, "activityLogs"),
+        where("targetId", "==", req.userId),
+        where("module", "==", "verification"),
+      ));
+      const existing = snap.docs.find(
+        (d) =>
+          d.data().action === "verification_document_downloaded" &&
+          d.data().actorId === user.uid &&
+          d.data().meta?.other?.storagePath === downloadedDoc.storagePath
+      );
+      if (existing) {
+        const prev = existing.data().meta?.other?.downloadCount ?? 1;
+        await updateDoc(doc(db, "activityLogs", existing.id), {
+          "meta.other.lastDownloadedAt": serverTimestamp(),
+          "meta.other.downloadCount": prev + 1,
+        });
+      } else {
+        await addDoc(collection(db, "activityLogs"), {
+          actorId: user.uid,
+          actorName: user.displayName ?? "Admin",
+          actorEmail: user.email ?? null,
+          module: "verification",
+          action: "verification_document_downloaded",
+          description: `Downloaded "${downloadedDoc.name}" (${downloadedDoc.category})`,
+          targetId: req.userId,
+          targetName: req.name,
+          affectedFiles: [],
+          meta: {
+            from: null, to: null,
+            other: {
+              documentName: downloadedDoc.name,
+              storagePath: downloadedDoc.storagePath,
+              downloadCount: 1,
+              lastDownloadedAt: null,
+            },
+          },
+          createdAt: serverTimestamp(),
+        });
+      }
+    } catch (err) {
+      console.warn("[logDocumentDownload] failed:", err);
+    }
+  }, [user]);
 
   // ─── Load users when create modal opens ──────────────────────────────────
 
@@ -316,6 +770,7 @@ export default function VerificationPage() {
         status: "pending",
         attemptCount,
         submittedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
         reviewedAt: null,
         reviewedBy: null,
         rejectReason: null,
@@ -390,7 +845,7 @@ export default function VerificationPage() {
         userEmail: notifUser.email,
         message: notifFinalMessage,
         category: "account_verification",
-        ...(notifVerificationStatus ? { verification_status: notifVerificationStatus } : {}),
+        verification_status: notifVerificationStatus,
         read: false,
         createdAt: serverTimestamp(),
         createdBy: user.displayName ?? user.email ?? user.uid,
@@ -424,13 +879,20 @@ export default function VerificationPage() {
   const handleApprove = useCallback(async () => {
     if (!selected || !user) return;
     setSubmitting(true);
+    const approvedUser = selected;
     try {
-      await updateDoc(doc(db, "verification_requests", selected.id), {
-        status: "verified",
-        reviewedAt: serverTimestamp(),
-        reviewedBy: user.displayName ?? user.email ?? user.uid,
-        rejectReason: null,
-      });
+      await Promise.all([
+        updateDoc(doc(db, "verification_requests", selected.id), {
+          status: "verified",
+          reviewedAt: serverTimestamp(),
+          reviewedBy: user.displayName ?? user.email ?? user.uid,
+          rejectReason: null,
+          updatedAt: serverTimestamp(),
+        }),
+        updateDoc(doc(db, "users", selected.userId), {
+          isVerified: "verified",
+        }),
+      ]);
       await writeLog({
         actorId: user.uid,
         actorName: user.displayName ?? "Admin",
@@ -443,6 +905,13 @@ export default function VerificationPage() {
       });
       setSelected(null);
       setActionMode(null);
+      setNotifUser({ id: approvedUser.userId, name: approvedUser.name, email: approvedUser.email, phone: approvedUser.phone, photoUrl: approvedUser.photoUrl });
+      setNotifUserSearch(approvedUser.name);
+      setNotifPreset("verified");
+      setNotifVerificationStatus("verified");
+      setNotifRejectReason("");
+      setNotifSent(false);
+      setActivePageTab("send_notification");
     } finally {
       setSubmitting(false);
     }
@@ -451,12 +920,15 @@ export default function VerificationPage() {
   const handleReject = useCallback(async () => {
     if (!selected || !user || !rejectReason.trim()) return;
     setSubmitting(true);
+    const rejectedUser = selected;
+    const reason = rejectReason.trim();
     try {
       await updateDoc(doc(db, "verification_requests", selected.id), {
         status: "rejected",
         reviewedAt: serverTimestamp(),
         reviewedBy: user.displayName ?? user.email ?? user.uid,
-        rejectReason: rejectReason.trim(),
+        rejectReason: reason,
+        updatedAt: serverTimestamp(),
       });
       await writeLog({
         actorId: user.uid,
@@ -464,13 +936,20 @@ export default function VerificationPage() {
         actorEmail: user.email ?? undefined,
         module: "verification",
         action: "verification_rejected",
-        description: `Rejected verification for ${selected.name}: ${rejectReason.trim()}`,
+        description: `Rejected verification for ${selected.name}: ${reason}`,
         targetId: selected.userId,
         targetName: selected.name,
       });
       setSelected(null);
       setActionMode(null);
       setRejectReason("");
+      setNotifUser({ id: rejectedUser.userId, name: rejectedUser.name, email: rejectedUser.email, phone: rejectedUser.phone, photoUrl: rejectedUser.photoUrl });
+      setNotifUserSearch(rejectedUser.name);
+      setNotifPreset("not_approved");
+      setNotifVerificationStatus("unverified");
+      setNotifRejectReason(reason);
+      setNotifSent(false);
+      setActivePageTab("send_notification");
     } finally {
       setSubmitting(false);
     }
@@ -483,23 +962,68 @@ export default function VerificationPage() {
     pending: requests.filter((r) => r.status === "pending").length,
     verified: requests.filter((r) => r.status === "verified").length,
     rejected: requests.filter((r) => r.status === "rejected").length,
+    cancelled: requests.filter((r) => r.status === "cancelled").length,
   }), [requests]);
+
+  const notifStats = useMemo(() => ({
+    total: notifDocs.length,
+    pending: notifDocs.filter((n) => n.verification_status === "pending").length,
+    verified: notifDocs.filter((n) => n.verification_status === "verified").length,
+    unverified: notifDocs.filter((n) => n.verification_status === "unverified").length,
+  }), [notifDocs]);
+
+  const filteredNotifDocs = useMemo(() => {
+    const nq = notifSearch.toLowerCase();
+    const fromMs = notifDateFrom ? new Date(notifDateFrom).getTime() : null;
+    const toMs = notifDateTo ? new Date(notifDateTo + "T23:59:59").getTime() : null;
+    const result = notifDocs.filter((n) => {
+      if (notifStatusFilter !== "all" && n.verification_status !== notifStatusFilter) return false;
+      if (nq && !n.userName.toLowerCase().includes(nq) && !n.userEmail.toLowerCase().includes(nq) && !n.message.toLowerCase().includes(nq)) return false;
+      if (fromMs || toMs) {
+        const ms = n.createdAt ? n.createdAt.toDate().getTime() : null;
+        if (!ms) return false;
+        if (fromMs && ms < fromMs) return false;
+        if (toMs && ms > toMs) return false;
+      }
+      return true;
+    });
+    result.sort((a, b) => {
+      const aMs = a.createdAt?.toDate().getTime() ?? 0;
+      const bMs = b.createdAt?.toDate().getTime() ?? 0;
+      return notifSortOrder === "newest" ? bMs - aMs : aMs - bMs;
+    });
+    return result;
+  }, [notifDocs, notifStatusFilter, notifSearch, notifSortOrder, notifDateFrom, notifDateTo]);
 
   // ─── Filtered + paginated ─────────────────────────────────────────────────
 
-  const filtered = useMemo(() => requests.filter((r) => {
-    const matchStatus = statusFilter === "all" || r.status === statusFilter;
-    const q = search.toLowerCase();
-    const matchSearch = !q || r.name.toLowerCase().includes(q) ||
-      r.email.toLowerCase().includes(q) || r.phone.includes(q) ||
-      r.userId.toLowerCase().includes(q);
-    return matchStatus && matchSearch;
-  }), [requests, search, statusFilter]);
+  const filtered = useMemo(() => {
+    const fromMs = dateFrom ? new Date(dateFrom).getTime() : null;
+    const toMs = dateTo ? new Date(dateTo + "T23:59:59").getTime() : null;
+    const result = requests.filter((r) => {
+      if (statusFilter !== "all" && r.status !== statusFilter) return false;
+      const q = search.toLowerCase();
+      if (q && !r.name.toLowerCase().includes(q) && !r.email.toLowerCase().includes(q) && !r.phone.includes(q) && !r.userId.toLowerCase().includes(q)) return false;
+      if (fromMs || toMs) {
+        const ms = r.submittedAt ? r.submittedAt.toDate().getTime() : null;
+        if (!ms) return false;
+        if (fromMs && ms < fromMs) return false;
+        if (toMs && ms > toMs) return false;
+      }
+      return true;
+    });
+    result.sort((a, b) => {
+      const aMs = a.submittedAt?.toDate().getTime() ?? 0;
+      const bMs = b.submittedAt?.toDate().getTime() ?? 0;
+      return sortOrder === "newest" ? bMs - aMs : aMs - bMs;
+    });
+    return result;
+  }, [requests, search, statusFilter, sortOrder, dateFrom, dateTo]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  useEffect(() => { setPage(1); }, [search, statusFilter]);
+  useEffect(() => { setPage(1); }, [search, statusFilter, sortOrder, dateFrom, dateTo]);
 
   if (!user) return null;
 
@@ -664,6 +1188,8 @@ export default function VerificationPage() {
         }
         .vr-table tr:last-child td { border-bottom: none; }
         .vr-table tr:hover td { background: var(--bg-hover); cursor: pointer; }
+        .vr-copy-btn { opacity: 0; transition: opacity 0.15s; }
+        .vr-table tr:hover .vr-copy-btn { opacity: 1; }
         .vr-name { font-weight: 600; }
         .vr-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
         .vr-attempts { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-muted); }
@@ -727,6 +1253,24 @@ export default function VerificationPage() {
         .vr-textarea:focus { border-color: var(--blue); }
         .vr-confirm-box { display: flex; flex-direction: column; gap: 14px; }
         .vr-confirm-text { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
+
+        /* ── Resubmission flag ── */
+        .vr-resubmit-badge {
+          display: inline-flex; align-items: center; gap: 4px;
+          font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+          color: var(--orange); background: color-mix(in srgb, var(--orange) 12%, transparent);
+          border: 1px solid color-mix(in srgb, var(--orange) 35%, transparent);
+          border-radius: 999px; padding: 2px 7px; white-space: nowrap;
+        }
+        .vr-resubmit-row td { background: color-mix(in srgb, var(--orange) 4%, transparent); }
+        .vr-resubmit-row:hover td { background: color-mix(in srgb, var(--orange) 8%, transparent) !important; }
+        .vr-resubmit-banner {
+          display: flex; align-items: flex-start; gap: 10px;
+          background: color-mix(in srgb, var(--orange) 10%, transparent);
+          border: 1px solid color-mix(in srgb, var(--orange) 35%, transparent);
+          border-radius: var(--radius-sm); padding: 10px 13px;
+          font-size: 13px; color: var(--orange); margin-bottom: 14px;
+        }
 
         /* ── Section label ── */
         .vr-section-label {
@@ -919,10 +1463,215 @@ export default function VerificationPage() {
           className={`vr-page-tab${activePageTab === "send_notification" ? " active" : ""}`}
           onClick={openNotifTab}
         >
-          <Bell size={14} />
+          <Send size={14} />
           Create Notification
         </button>
+        <button
+          className={`vr-page-tab${activePageTab === "notifications" ? " active" : ""}`}
+          onClick={() => setActivePageTab("notifications")}
+        >
+          <Bell size={14} />
+          Notifications
+          {/* {notifDocs.length > 0 && (
+            <span className="vr-badge-count" style={{ background: "var(--blue)" }}>{notifDocs.length}</span>
+          )} */}
+        </button>
       </div>
+
+      {/* ── Notifications Tab ─────────────────────────────────────────────── */}
+      {activePageTab === "notifications" && (
+        <>
+          {/* Stats cards */}
+          <div className="vr-stats">
+            {([
+              { key: "total",      label: "Total",      color: "var(--blue)" },
+              { key: "pending",    label: "Pending",    color: "var(--orange)" },
+              { key: "verified",   label: "Verified",   color: "var(--green)" },
+              { key: "unverified", label: "Unverified", color: "var(--red)" },
+            ] as const).map(({ key, label, color }) => (
+              <div
+                key={key}
+                className={`vr-stat-card vr-stat-card--${key === "unverified" ? "rejected" : key}`}
+                data-clickable={key !== "total"}
+                onClick={() => key !== "total" && setNotifStatusFilter(notifStatusFilter === key ? "all" : key)}
+                title={key !== "total" ? `Filter by ${label}` : undefined}
+                style={notifStatusFilter === key ? { borderColor: color, boxShadow: `0 0 0 2px ${color}33` } : undefined}
+              >
+                <span className="vr-stat-label">{label}</span>
+                <span className="vr-stat-value" style={key !== "total" ? { color } : undefined}>
+                  {notifStats[key]}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Filter toolbar */}
+          <div className="vr-toolbar" style={{ marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+            <div className="vr-search">
+              <Search size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+              <input
+                placeholder="Search by name, email, or message…"
+                value={notifSearch}
+                onChange={(e) => setNotifSearch(e.target.value)}
+              />
+              {notifSearch && (
+                <button onClick={() => setNotifSearch("")} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex" }}>×</button>
+              )}
+            </div>
+            <div className="vr-tabs">
+              {(["all", "pending", "verified", "unverified"] as const).map((s) => (
+                <button
+                  key={s}
+                  className={`vr-tab${notifStatusFilter === s ? " active" : ""}`}
+                  onClick={() => setNotifStatusFilter(s)}
+                >
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                  {s === "pending" && notifStats.pending > 0 && (
+                    <span className="vr-badge-count">{notifStats.pending}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button
+                onClick={() => setNotifSortOrder(o => o === "newest" ? "oldest" : "newest")}
+                style={{
+                  display: "flex", alignItems: "center", gap: 5, padding: "5px 10px",
+                  fontSize: 12, fontWeight: 600, borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--border)", background: "var(--surface)",
+                  color: "var(--text-secondary)", cursor: "pointer", whiteSpace: "nowrap",
+                }}
+              >
+                {notifSortOrder === "newest" ? "↓ Newest" : "↑ Oldest"}
+              </button>
+              <input
+                type="date"
+                value={notifDateFrom}
+                onChange={(e) => setNotifDateFrom(e.target.value)}
+                title="From date"
+                style={{ fontSize: 12, padding: "5px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-secondary)" }}
+              />
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>–</span>
+              <input
+                type="date"
+                value={notifDateTo}
+                onChange={(e) => setNotifDateTo(e.target.value)}
+                title="To date"
+                style={{ fontSize: 12, padding: "5px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-secondary)" }}
+              />
+              {(notifDateFrom || notifDateTo) && (
+                <button onClick={() => { setNotifDateFrom(""); setNotifDateTo(""); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: 14 }}>×</button>
+              )}
+            </div>
+          </div>
+
+          {/* Table */}
+          <div className="vr-table-wrap">
+            {notifDocsLoading ? (
+              <div className="vr-empty">
+                <RefreshCw size={32} style={{ animation: "spin 1s linear infinite", display: "block", margin: "0 auto 8px" }} />
+                Loading…
+              </div>
+            ) : filteredNotifDocs.length === 0 ? (
+              <div className="vr-empty">
+                <Bell size={36} style={{ display: "block", margin: "0 auto 8px" }} />
+                No {notifStatusFilter !== "all" ? notifStatusFilter : ""} notifications
+              </div>
+            ) : (
+              <table className="vr-table">
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>Message</th>
+                    <th>Verification Status</th>
+                    <th>Read</th>
+                    <th>Sent At</th>
+                    <th>Sent By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredNotifDocs.map((n) => (
+                    <tr key={n.id}>
+                      <td>
+                        <div className="vr-name" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          {n.userName || "—"}
+                          {n.userName && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); copyToClipboard(n.userName, `${n.id}-name`); }}
+                              title="Copy name"
+                              className="vr-copy-btn"
+                              style={{
+                                background: "none", border: "none", cursor: "pointer", padding: "1px 3px",
+                                color: copiedKey === `${n.id}-name` ? "var(--green)" : "var(--text-muted)",
+                                display: "flex", alignItems: "center", borderRadius: 3,
+                                transition: "color 0.15s, opacity 0.15s",
+                              }}
+                            >
+                              <Copy size={10} />
+                            </button>
+                          )}
+                        </div>
+                        <div className="vr-sub">{n.userEmail}</div>
+                        <div className="vr-sub" style={{ fontFamily: "monospace", display: "flex", alignItems: "center", gap: 4 }}>
+                          {n.userId}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); copyToClipboard(n.userId, `${n.id}-uid`); }}
+                            title="Copy user ID"
+                            className="vr-copy-btn"
+                            style={{
+                              background: "none", border: "none", cursor: "pointer", padding: "1px 3px",
+                              color: copiedKey === `${n.id}-uid` ? "var(--green)" : "var(--text-muted)",
+                              display: "flex", alignItems: "center", borderRadius: 3,
+                              transition: "color 0.15s, opacity 0.15s",
+                            }}
+                          >
+                            <Copy size={10} />
+                          </button>
+                        </div>
+                      </td>
+                      <td style={{ maxWidth: 320 }}>
+                        <span style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5, display: "block" }}>
+                          {n.message}
+                        </span>
+                      </td>
+                      <td>
+                        {n.verification_status ? (
+                          <span style={{
+                            display: "inline-flex", alignItems: "center", gap: 5,
+                            fontSize: 12, fontWeight: 600, textTransform: "capitalize",
+                            color: n.verification_status === "verified" ? "var(--green)"
+                              : n.verification_status === "pending" ? "var(--yellow)"
+                              : "var(--red)",
+                          }}>
+                            {n.verification_status === "verified" ? <CheckCircle size={12} />
+                              : n.verification_status === "pending" ? <Clock size={12} />
+                              : <XCircle size={12} />}
+                            {n.verification_status}
+                          </span>
+                        ) : "—"}
+                      </td>
+                      <td>
+                        <span style={{
+                          fontSize: 12, fontWeight: 600,
+                          color: n.read ? "var(--green)" : "var(--text-muted)",
+                        }}>
+                          {n.read ? "Read" : "Unread"}
+                        </span>
+                      </td>
+                      <td style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                        {n.createdAt ? fmtDate(n.createdAt) : "—"}
+                      </td>
+                      <td style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                        {n.createdBy || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
 
       {activePageTab === "requests" && (<>
 
@@ -965,7 +1714,7 @@ export default function VerificationPage() {
         </div>
 
         <div className="vr-tabs">
-          {(["pending", "verified", "rejected", "all"] as StatusFilter[]).map((s) => (
+          {(["pending", "verified", "rejected", "cancelled", "all"] as StatusFilter[]).map((s) => (
             <button
               key={s}
               className={`vr-tab${statusFilter === s ? " active" : ""}`}
@@ -977,6 +1726,39 @@ export default function VerificationPage() {
               )}
             </button>
           ))}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            onClick={() => setSortOrder(o => o === "newest" ? "oldest" : "newest")}
+            style={{
+              display: "flex", alignItems: "center", gap: 5, padding: "5px 10px",
+              fontSize: 12, fontWeight: 600, borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border)", background: "var(--surface)",
+              color: "var(--text-secondary)", cursor: "pointer", whiteSpace: "nowrap",
+            }}
+            title="Toggle sort order"
+          >
+            {sortOrder === "newest" ? "↓ Newest" : "↑ Oldest"}
+          </button>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            title="From date"
+            style={{ fontSize: 12, padding: "5px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-secondary)" }}
+          />
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>–</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            title="To date"
+            style={{ fontSize: 12, padding: "5px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-secondary)" }}
+          />
+          {(dateFrom || dateTo) && (
+            <button onClick={() => { setDateFrom(""); setDateTo(""); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: 14 }}>×</button>
+          )}
         </div>
 
         {/* <Button variant="primary" size="sm" onClick={openCreateModal}>
@@ -1007,13 +1789,16 @@ export default function VerificationPage() {
                   <th>Attempts</th>
                   <th>Submitted</th>
                   <th>Status</th>
-                  <th>Reviewed</th>
+                  <th>Last Updated</th>
                 </tr>
               </thead>
               <tbody>
-                {paginated.map((r) => (
+                {paginated.map((r) => {
+                  const isResubmission = r.attemptCount > 1 && r.status === "pending";
+                  return (
                   <tr
                     key={r.id}
+                    className={isResubmission ? "vr-resubmit-row" : undefined}
                     onClick={() => {
                       setSelected(r);
                       setActionMode(null);
@@ -1028,11 +1813,12 @@ export default function VerificationPage() {
                           <button
                             onClick={(e) => { e.stopPropagation(); copyToClipboard(r.name, `${r.id}-name`); }}
                             title="Copy name"
+                            className="vr-copy-btn"
                             style={{
                               background: "none", border: "none", cursor: "pointer", padding: "1px 3px",
                               color: copiedKey === `${r.id}-name` ? "var(--green)" : "var(--text-muted)",
                               display: "flex", alignItems: "center", borderRadius: 3,
-                              transition: "color 0.15s",
+                              transition: "color 0.15s, opacity 0.15s",
                             }}
                           >
                             <Copy size={10} />
@@ -1044,11 +1830,12 @@ export default function VerificationPage() {
                         <button
                           onClick={(e) => { e.stopPropagation(); copyToClipboard(r.userId, `${r.id}-uid`); }}
                           title="Copy user ID"
+                          className="vr-copy-btn"
                           style={{
                             background: "none", border: "none", cursor: "pointer", padding: "1px 3px",
                             color: copiedKey === `${r.id}-uid` ? "var(--green)" : "var(--text-muted)",
                             display: "flex", alignItems: "center", borderRadius: 3,
-                            transition: "color 0.15s",
+                            transition: "color 0.15s, opacity 0.15s",
                           }}
                         >
                           <Copy size={10} />
@@ -1060,7 +1847,12 @@ export default function VerificationPage() {
                       <div className="vr-sub">{r.phone}</div>
                     </td>
                     <td>
-                      <span className="vr-attempts">{r.attemptCount}</span>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <span className="vr-attempts">{r.attemptCount}×</span>
+                        {isResubmission && (
+                          <span className="vr-resubmit-badge">Re-review</span>
+                        )}
+                      </div>
                     </td>
                     <td style={{ fontSize: 12, color: "var(--text-muted)" }}>{fmtDate(r.submittedAt)}</td>
                     <td>
@@ -1075,11 +1867,11 @@ export default function VerificationPage() {
                       </span>
                     </td>
                     <td style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                      {r.reviewedAt ? fmtDate(r.reviewedAt) : "—"}
-                      {r.reviewedBy && <div className="vr-sub">{r.reviewedBy}</div>}
+                      {fmtDate(r.updatedAt ?? r.reviewedAt ?? r.submittedAt)}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
 
@@ -1260,6 +2052,16 @@ export default function VerificationPage() {
               )}
             </div>
 
+            {/* Resubmission banner */}
+            {selected.attemptCount > 1 && selected.status === "pending" && (
+              <div className="vr-resubmit-banner">
+                <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>
+                  <strong>Re-review — attempt {selected.attemptCount}.</strong> This user previously had a verification request that was rejected. Review carefully before approving.
+                </span>
+              </div>
+            )}
+
             {/* Rejection reason */}
             {selected.status === "rejected" && selected.rejectReason && (
               <div className="vr-reject-reason">
@@ -1268,22 +2070,89 @@ export default function VerificationPage() {
               </div>
             )}
 
-            {/* ── ID Document photo ── */}
-            <div className="vr-section-label">
-              <ImageIcon size={11} />
-              ID Document
+            {/* ── Submitted Documents ── */}
+            <div className="vr-section-label" style={{ justifyContent: "space-between" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <ImageIcon size={11} />
+                Submitted Documents
+              </span>
+              {selected.documents && selected.documents.length > 1 && (
+                <button
+                  onClick={() => handleDownloadAll(selected.documents, selected)}
+                  disabled={downloadingAll}
+                  style={{
+                    fontSize: 11, padding: "3px 9px", borderRadius: 5,
+                    border: "1px solid var(--border)", background: "transparent",
+                    color: "var(--text-muted)", cursor: "pointer", transition: "all 0.15s",
+                  }}
+                >
+                  {downloadingAll ? "Zipping…" : "Download all"}
+                </button>
+              )}
             </div>
-            {selected.photoUrl ? (
+            {selected.documents && selected.documents.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {selected.documents.map((doc, i) => {
+                  const type = getDocType(doc.name);
+                  const displayName = doc.name.replace(/[<>"'&]/g, "");
+                  const categoryLabel = doc.category.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+                  const isMissing = missingDocs.has(doc.storagePath);
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 10,
+                        padding: "9px 12px", borderRadius: 8,
+                        border: `1px solid ${isMissing ? "color-mix(in srgb, var(--red) 30%, transparent)" : "var(--border)"}`,
+                        background: isMissing ? "color-mix(in srgb, var(--red) 6%, transparent)" : "var(--bg-elevated)",
+                      }}
+                    >
+                      {type === "image"
+                        ? <ImageIcon size={14} style={{ flexShrink: 0, color: isMissing ? "var(--red)" : "var(--text-muted)" }} />
+                        : <FileText  size={14} style={{ flexShrink: 0, color: isMissing ? "var(--red)" : "var(--text-muted)" }} />}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: isMissing ? "var(--text-muted)" : "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: isMissing ? "line-through" : "none" }}>{displayName}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 1, display: "flex", alignItems: "center", gap: 5 }}>
+                          {categoryLabel}
+                          {isMissing && (
+                            <span style={{ fontSize: 10, fontWeight: 600, color: "var(--red)", background: "color-mix(in srgb, var(--red) 12%, transparent)", padding: "1px 5px", borderRadius: 4 }}>
+                              not found in storage
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setDocViewer(doc);
+                          logDocumentView(doc, selected);
+                        }}
+                        disabled={isMissing}
+                        style={{
+                          fontSize: 12, padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)",
+                          background: "transparent", color: isMissing ? "var(--text-muted)" : "var(--text-secondary)",
+                          cursor: isMissing ? "not-allowed" : "pointer",
+                          whiteSpace: "nowrap", transition: "all 0.15s", opacity: isMissing ? 0.4 : 1,
+                        }}
+                        onMouseEnter={(e) => { if (!isMissing) { (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-surface)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; }}}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = isMissing ? "var(--text-muted)" : "var(--text-secondary)"; }}
+                      >
+                        {type === "other" ? "Download" : "View"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : selected.photoUrl ? (
               <div className="vr-photo-box">
                 <img src={selected.photoUrl} alt="ID document" />
                 <div className="vr-photo-footer">
-                  <a href={selected.photoUrl} target="_blank" rel="noreferrer">Open full image ↗</a>
+                  <a href={selected.photoUrl} target="_blank" rel="noreferrer noopener">Open full image ↗</a>
                 </div>
               </div>
             ) : (
               <div className="vr-no-photo">
                 <ImageIcon size={14} style={{ opacity: 0.4 }} />
-                No photo provided.
+                No documents provided.
               </div>
             )}
 
@@ -1293,41 +2162,70 @@ export default function VerificationPage() {
               History
             </div>
 
-            {timelineLoading ? (
-              <div className="vr-timeline-loading">Loading history…</div>
-            ) : timeline.length === 0 ? (
-              <div className="vr-timeline-empty">No history yet.</div>
-            ) : (
-              <div className="vr-timeline">
-                {timeline.map((entry, i) => {
-                  const isLast = i === timeline.length - 1;
-                  const cfg = TIMELINE_CONFIG[entry.action] ?? TIMELINE_CONFIG.verification_created;
-                  return (
-                    <div key={i} className="vr-timeline-row">
-                      <div className="vr-timeline-track">
-                        <div
-                          className="vr-timeline-dot"
-                          style={{ background: cfg.color, boxShadow: `0 0 0 3px ${cfg.glow}` }}
-                        />
-                        {!isLast && <div className="vr-timeline-line" />}
+            <div style={{
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              borderRadius: 10,
+              padding: "14px 14px 4px",
+              marginBottom: 16,
+              maxHeight: "27vh",
+              overflowY: "auto",
+            }}>
+              {timelineLoading ? (
+                <div className="vr-timeline-loading">Loading history…</div>
+              ) : timeline.length === 0 ? (
+                <div className="vr-timeline-empty">No history yet.</div>
+              ) : (
+                <div className="vr-timeline">
+                  {timeline.map((entry, i) => {
+                    const isLast = i === timeline.length - 1;
+                    const cfg = TIMELINE_CONFIG[entry.action] ?? TIMELINE_CONFIG.verification_created;
+                    return (
+                      <div key={i} className="vr-timeline-row">
+                        <div className="vr-timeline-track">
+                          <div
+                            className="vr-timeline-dot"
+                            style={{ background: cfg.color, boxShadow: `0 0 0 3px ${cfg.glow}` }}
+                          />
+                          {!isLast && <div className="vr-timeline-line" />}
+                        </div>
+                        <div className="vr-timeline-content">
+                          <span className="vr-timeline-action" style={{ color: cfg.color }}>{cfg.label}</span>
+                          <span className="vr-timeline-actor">{entry.actorName}</span>
+                          {entry.action === "verification_document_viewed" ? (
+                            <span className="vr-timeline-date" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                              <span>First viewed: {entry.date ? entry.date.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</span>
+                              {entry.lastViewedAt && (
+                                <span>Last viewed: {entry.lastViewedAt.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}{entry.viewCount && entry.viewCount > 1 ? ` (${entry.viewCount}×)` : ""}</span>
+                              )}
+                            </span>
+                          ) : entry.action === "verification_document_downloaded" ? (
+                            <span className="vr-timeline-date" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                              <span>First downloaded: {entry.date ? entry.date.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</span>
+                              {entry.lastDownloadedAt && (
+                                <span>Last downloaded: {entry.lastDownloadedAt.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}{entry.downloadCount && entry.downloadCount > 1 ? ` (${entry.downloadCount}×)` : ""}</span>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="vr-timeline-date">
+                              {entry.date
+                                ? entry.date.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })
+                                : "—"}
+                            </span>
+                          )}
+                          {entry.action === "verification_note" && entry.description && (
+                            <span className="vr-timeline-note-text">{entry.description}</span>
+                          )}
+                          {(entry.action === "verification_document_viewed" || entry.action === "verification_document_downloaded") && entry.description && (
+                            <span className="vr-timeline-note-text" style={{ color: "var(--text-muted)", fontStyle: "italic" }}>{entry.description}</span>
+                          )}
+                        </div>
                       </div>
-                      <div className="vr-timeline-content">
-                        <span className="vr-timeline-action" style={{ color: cfg.color }}>{cfg.label}</span>
-                        <span className="vr-timeline-actor">{entry.actorName}</span>
-                        <span className="vr-timeline-date">
-                          {entry.date
-                            ? entry.date.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })
-                            : "—"}
-                        </span>
-                        {entry.action === "verification_note" && entry.description && (
-                          <span className="vr-timeline-note-text">{entry.description}</span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
             {/* ── Add note (pending only) ── */}
             {selected.status === "pending" && (
@@ -1564,7 +2462,7 @@ export default function VerificationPage() {
               {(["pending", "verified", "unverified"] as const).map((s) => (
                 <button
                   key={s}
-                  onClick={() => setNotifVerificationStatus(notifVerificationStatus === s ? "" : s)}
+                  onClick={() => setNotifVerificationStatus(s)}
                   style={{
                     padding: "7px 16px", borderRadius: "var(--radius-sm)",
                     border: `1px solid ${notifVerificationStatus === s
@@ -1587,7 +2485,7 @@ export default function VerificationPage() {
               ))}
             </div>
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-              Optional — sets the <code style={{ fontSize: 11 }}>verification_status</code> field on the notification document.
+              Required — sets the <code style={{ fontSize: 11 }}>verification_status</code> field on the notification document.
             </div>
           </div>
 
@@ -1599,6 +2497,7 @@ export default function VerificationPage() {
               disabled={
                 !notifUser ||
                 !notifPreset ||
+                !notifVerificationStatus ||
                 sendingNotif ||
                 (notifPreset === "not_approved" && !notifRejectReason.trim()) ||
                 (notifPreset === "custom" && !notifCustomMessage.trim())
@@ -1612,6 +2511,55 @@ export default function VerificationPage() {
         </div>
       )}
 
+      {docViewer && (
+        <DocViewerModal doc={docViewer} onClose={() => setDocViewer(null)} />
+      )}
+
+      {downloadResult && (
+        <Modal
+          open={!!downloadResult}
+          title="Download Result"
+          onClose={() => setDownloadResult(null)}
+          size="sm"
+          footer={
+            <Button variant="primary" size="sm" onClick={() => setDownloadResult(null)}>
+              Done
+            </Button>
+          }
+        >
+          {downloadResult.success.length > 0 && (
+            <div style={{ marginBottom: downloadResult.failed.length ? 16 : 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "var(--green)", marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
+                <CheckCircle size={13} /> {downloadResult.success.length} file{downloadResult.success.length !== 1 ? "s" : ""} downloaded
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {downloadResult.success.map((name, i) => (
+                  <div key={`ok-${i}`} style={{ fontSize: 12, color: "var(--text-secondary)", padding: "5px 10px", borderRadius: 6, background: "var(--bg-elevated)", border: "1px solid var(--border)" }}>
+                    {name}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {downloadResult.failed.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "var(--red)", marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
+                <AlertTriangle size={13} /> {downloadResult.failed.length} file{downloadResult.failed.length !== 1 ? "s" : ""} not found in storage
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {downloadResult.failed.map((name, i) => (
+                  <div key={`fail-${i}`} style={{ fontSize: 12, color: "var(--text-muted)", padding: "5px 10px", borderRadius: 6, background: "var(--bg-elevated)", border: "1px solid var(--border)" }}>
+                    {name}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {downloadResult.success.length === 0 && downloadResult.failed.length === 0 && (
+            <p style={{ fontSize: 13, color: "var(--text-muted)" }}>No documents were found.</p>
+          )}
+        </Modal>
+      )}
     </AdminLayout>
   );
 }

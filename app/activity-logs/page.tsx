@@ -252,7 +252,10 @@ export default function ActivityLogsPage() {
   };
 
   // ── Client-side search + actor filter across the fetched page ───────────
+  // const HIDDEN_ACTIONS = new Set(["verification_document_downloaded"]);
+
   const filtered = logs.filter((log) => {
+    // if (HIDDEN_ACTIONS.has(log.action)) return false;
     if (search) {
       const q = search.toLowerCase();
       const matchesSearch =

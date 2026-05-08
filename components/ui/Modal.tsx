@@ -12,6 +12,7 @@ interface ModalProps {
   children?: React.ReactNode;
   footer?: React.ReactNode;
   size?: "sm" | "md" | "lg";
+  bodyStyle?: React.CSSProperties;
 }
 
 export default function Modal({
@@ -22,6 +23,7 @@ export default function Modal({
   children,
   footer,
   size = "md",
+  bodyStyle,
 }: ModalProps) {
   // Close on Escape key
   useEffect(() => {
@@ -136,7 +138,7 @@ export default function Modal({
           </button>
         </div>
 
-        {children && <div className="modal-body">{children}</div>}
+        {children && <div className="modal-body" style={bodyStyle}>{children}</div>}
 
         {footer && <div className="modal-footer">{footer}</div>}
       </div>
