@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import JSZip from "jszip";
 import AdminLayout from "@/components/layout/AdminLayout";
 import Modal from "@/components/ui/Modal";
@@ -149,6 +149,29 @@ function fmtDate(ts: Timestamp | null): string {
     month: "short", day: "numeric", year: "numeric",
     hour: "numeric", minute: "2-digit",
   });
+}
+
+function getAgeDays(ts: Timestamp | null): number | null {
+  if (!ts) return null;
+  return Math.floor((Date.now() - ts.toDate().getTime()) / 86_400_000);
+}
+
+function AgeBadge({ days, inline = false }: { days: number | null; inline?: boolean }) {
+  if (days === null) return null;
+  const color = days >= 7 ? "var(--red)" : days >= 3 ? "var(--yellow)" : "var(--text-muted)";
+  const label = days === 0 ? "Today" : `${days}d waiting`;
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, color,
+      display: inline ? "inline-flex" : "block",
+      alignItems: "center", gap: 3,
+      marginTop: inline ? 0 : 2,
+      marginLeft: inline ? 8 : 0,
+    }}>
+      {days >= 3 && <span style={{ fontSize: 9 }}>⚠</span>}
+      {label}
+    </span>
+  );
 }
 
 const STATUS_BADGE: Record<string, { icon: React.ReactNode }> = {
@@ -370,13 +393,15 @@ export default function VerificationPage() {
   useEffect(() => {
     if (!selected?.documents?.length) { setMissingDocs(new Set()); return; }
     setMissingDocs(new Set());
-    selected.documents.forEach(async (d) => {
-      try {
-        await getMetadata(ref(storage, d.storagePath));
-      } catch {
-        setMissingDocs((prev) => new Set(prev).add(d.storagePath));
-      }
-    });
+    Promise.all(
+      selected.documents.map(async (d) => {
+        try {
+          await getMetadata(ref(storage, d.storagePath));
+        } catch {
+          setMissingDocs((prev) => new Set(prev).add(d.storagePath));
+        }
+      })
+    );
   }, [selected]);
   const [downloadingAll, setDownloadingAll] = useState(false);
   const [downloadResult, setDownloadResult] = useState<{
@@ -422,6 +447,24 @@ export default function VerificationPage() {
     }
   }, [user]);
 
+  // ── Scroll persistence ────────────────────────────────────────────────────
+  const scrollPositions = useRef<Map<string, number>>(new Map());
+  const timelineRef = useRef<HTMLDivElement>(null);
+
+  // ── Doc log cache (avoid full query on repeat view/download) ─────────────
+  const docLogCache = useRef<Map<string, { viewId?: string; downloadId?: string }>>(new Map());
+  useEffect(() => { docLogCache.current.clear(); }, [selected?.id]);
+
+  // ── Scroll restore when same request is reopened ──────────────────────────
+  useEffect(() => {
+    if (!selected || !timelineRef.current) return;
+    const saved = scrollPositions.current.get(selected.id) ?? 0;
+    timelineRef.current.scrollTop = saved;
+  }, [selected?.id, timelineLoading]);
+
+  // ── Jump-to-request userId (set after approve/reject) ─────────────────────
+  const [jumpToReqUserId, setJumpToReqUserId] = useState<string | null>(null);
+
   // ── Copy feedback ─────────────────────────────────────────────────────────
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const copyToClipboard = (text: string, key: string) => {
@@ -441,6 +484,7 @@ export default function VerificationPage() {
   const [notifSortOrder, setNotifSortOrder] = useState<"newest" | "oldest">("newest");
   const [notifDateFrom, setNotifDateFrom] = useState("");
   const [notifDateTo, setNotifDateTo] = useState("");
+  const [notifPage, setNotifPage] = useState(1);
 
   // ── Send notification form ────────────────────────────────────────────────
   const [notifUserSearch, setNotifUserSearch] = useState("");
@@ -607,6 +651,8 @@ export default function VerificationPage() {
       ]);
       setNoteText("");
       setTimelineKey((k) => k + 1);
+      if (selected) scrollPositions.current.delete(selected.id);
+      setTimeout(() => { if (timelineRef.current) timelineRef.current.scrollTop = 0; }, 120);
     } finally {
       setAddingNote(false);
     }
@@ -617,46 +663,66 @@ export default function VerificationPage() {
   const logDocumentView = useCallback(async (viewedDoc: VerificationDocument, req: VerificationRequest) => {
     if (!user) return;
     try {
-      // Only use targetId + module — this index already exists from the timeline query
-      const snap = await getDocs(query(
-        collection(db, "activityLogs"),
-        where("targetId", "==", req.userId),
-        where("module", "==", "verification"),
-      ));
-      const existing = snap.docs.find(
-        (d) =>
-          d.data().action === "verification_document_viewed" &&
-          d.data().actorId === user.uid &&
-          d.data().meta?.other?.storagePath === viewedDoc.storagePath
-      );
-      if (existing) {
-        const prev = existing.data().meta?.other?.viewCount ?? 1;
-        await updateDoc(doc(db, "activityLogs", existing.id), {
+      const cacheKey = viewedDoc.storagePath;
+      const cached = docLogCache.current.get(cacheKey);
+      const cachedViewId = cached?.viewId;
+
+      if (cachedViewId) {
+        // Fast path: we already know the doc ID, skip the query
+        const snap = await getDocs(query(
+          collection(db, "activityLogs"),
+          where("targetId", "==", req.userId),
+          where("module", "==", "verification"),
+        ));
+        const existing = snap.docs.find((d) => d.id === cachedViewId);
+        const prev = existing?.data().meta?.other?.viewCount ?? 1;
+        await updateDoc(doc(db, "activityLogs", cachedViewId), {
           "meta.other.lastViewedAt": serverTimestamp(),
           "meta.other.viewCount": prev + 1,
         });
       } else {
-        await addDoc(collection(db, "activityLogs"), {
-          actorId: user.uid,
-          actorName: user.displayName ?? "Admin",
-          actorEmail: user.email ?? null,
-          module: "verification",
-          action: "verification_document_viewed",
-          description: `Viewed document "${viewedDoc.name}" (${viewedDoc.category})`,
-          targetId: req.userId,
-          targetName: req.name,
-          affectedFiles: [],
-          meta: {
-            from: null, to: null,
-            other: {
-              documentName: viewedDoc.name,
-              storagePath: viewedDoc.storagePath,
-              viewCount: 1,
-              lastViewedAt: null,
+        const snap = await getDocs(query(
+          collection(db, "activityLogs"),
+          where("targetId", "==", req.userId),
+          where("module", "==", "verification"),
+        ));
+        const existing = snap.docs.find(
+          (d) =>
+            d.data().action === "verification_document_viewed" &&
+            d.data().actorId === user.uid &&
+            d.data().meta?.other?.storagePath === viewedDoc.storagePath
+        );
+        if (existing) {
+          docLogCache.current.set(cacheKey, { ...cached, viewId: existing.id });
+          const prev = existing.data().meta?.other?.viewCount ?? 1;
+          await updateDoc(doc(db, "activityLogs", existing.id), {
+            "meta.other.lastViewedAt": serverTimestamp(),
+            "meta.other.viewCount": prev + 1,
+          });
+        } else {
+          const newDoc = await addDoc(collection(db, "activityLogs"), {
+            actorId: user.uid,
+            actorName: user.displayName ?? "Admin",
+            actorEmail: user.email ?? null,
+            module: "verification",
+            action: "verification_document_viewed",
+            description: `Viewed document "${viewedDoc.name}" (${viewedDoc.category})`,
+            targetId: req.userId,
+            targetName: req.name,
+            affectedFiles: [],
+            meta: {
+              from: null, to: null,
+              other: {
+                documentName: viewedDoc.name,
+                storagePath: viewedDoc.storagePath,
+                viewCount: 1,
+                lastViewedAt: null,
+              },
             },
-          },
-          createdAt: serverTimestamp(),
-        });
+            createdAt: serverTimestamp(),
+          });
+          docLogCache.current.set(cacheKey, { ...cached, viewId: newDoc.id });
+        }
       }
       setTimelineKey((k) => k + 1);
     } catch (err) {
@@ -669,57 +735,74 @@ export default function VerificationPage() {
   const logDocumentDownload = useCallback(async (downloadedDoc: VerificationDocument, req: VerificationRequest) => {
     if (!user) return;
     try {
-      const snap = await getDocs(query(
-        collection(db, "activityLogs"),
-        where("targetId", "==", req.userId),
-        where("module", "==", "verification"),
-      ));
-      const existing = snap.docs.find(
-        (d) =>
-          d.data().action === "verification_document_downloaded" &&
-          d.data().actorId === user.uid &&
-          d.data().meta?.other?.storagePath === downloadedDoc.storagePath
-      );
-      if (existing) {
-        const prev = existing.data().meta?.other?.downloadCount ?? 1;
-        await updateDoc(doc(db, "activityLogs", existing.id), {
+      const cacheKey = downloadedDoc.storagePath;
+      const cached = docLogCache.current.get(cacheKey);
+      const cachedDownloadId = cached?.downloadId;
+
+      if (cachedDownloadId) {
+        const snap = await getDocs(query(
+          collection(db, "activityLogs"),
+          where("targetId", "==", req.userId),
+          where("module", "==", "verification"),
+        ));
+        const existing = snap.docs.find((d) => d.id === cachedDownloadId);
+        const prev = existing?.data().meta?.other?.downloadCount ?? 1;
+        await updateDoc(doc(db, "activityLogs", cachedDownloadId), {
           "meta.other.lastDownloadedAt": serverTimestamp(),
           "meta.other.downloadCount": prev + 1,
         });
       } else {
-        await addDoc(collection(db, "activityLogs"), {
-          actorId: user.uid,
-          actorName: user.displayName ?? "Admin",
-          actorEmail: user.email ?? null,
-          module: "verification",
-          action: "verification_document_downloaded",
-          description: `Downloaded "${downloadedDoc.name}" (${downloadedDoc.category})`,
-          targetId: req.userId,
-          targetName: req.name,
-          affectedFiles: [],
-          meta: {
-            from: null, to: null,
-            other: {
-              documentName: downloadedDoc.name,
-              storagePath: downloadedDoc.storagePath,
-              downloadCount: 1,
-              lastDownloadedAt: null,
+        const snap = await getDocs(query(
+          collection(db, "activityLogs"),
+          where("targetId", "==", req.userId),
+          where("module", "==", "verification"),
+        ));
+        const existing = snap.docs.find(
+          (d) =>
+            d.data().action === "verification_document_downloaded" &&
+            d.data().actorId === user.uid &&
+            d.data().meta?.other?.storagePath === downloadedDoc.storagePath
+        );
+        if (existing) {
+          docLogCache.current.set(cacheKey, { ...cached, downloadId: existing.id });
+          const prev = existing.data().meta?.other?.downloadCount ?? 1;
+          await updateDoc(doc(db, "activityLogs", existing.id), {
+            "meta.other.lastDownloadedAt": serverTimestamp(),
+            "meta.other.downloadCount": prev + 1,
+          });
+        } else {
+          const newDoc = await addDoc(collection(db, "activityLogs"), {
+            actorId: user.uid,
+            actorName: user.displayName ?? "Admin",
+            actorEmail: user.email ?? null,
+            module: "verification",
+            action: "verification_document_downloaded",
+            description: `Downloaded "${downloadedDoc.name}" (${downloadedDoc.category})`,
+            targetId: req.userId,
+            targetName: req.name,
+            affectedFiles: [],
+            meta: {
+              from: null, to: null,
+              other: {
+                documentName: downloadedDoc.name,
+                storagePath: downloadedDoc.storagePath,
+                downloadCount: 1,
+                lastDownloadedAt: null,
+              },
             },
-          },
-          createdAt: serverTimestamp(),
-        });
+            createdAt: serverTimestamp(),
+          });
+          docLogCache.current.set(cacheKey, { ...cached, downloadId: newDoc.id });
+        }
       }
     } catch (err) {
       console.warn("[logDocumentDownload] failed:", err);
     }
   }, [user]);
 
-  // ─── Load users when create modal opens ──────────────────────────────────
+  // ─── Shared user loader ───────────────────────────────────────────────────
 
-  const openCreateModal = useCallback(async () => {
-    setCreateOpen(true);
-    setPickedUser(null);
-    setUserSearch("");
+  const loadAllUsers = useCallback(async () => {
     if (allUsers.length > 0) return;
     setUsersLoading(true);
     try {
@@ -735,6 +818,15 @@ export default function VerificationPage() {
       setUsersLoading(false);
     }
   }, [allUsers.length]);
+
+  // ─── Load users when create modal opens ──────────────────────────────────
+
+  const openCreateModal = useCallback(async () => {
+    setCreateOpen(true);
+    setPickedUser(null);
+    setUserSearch("");
+    await loadAllUsers();
+  }, [loadAllUsers]);
 
   const filteredUsers = useMemo(() => {
     const q = userSearch.toLowerCase().trim();
@@ -809,21 +901,8 @@ export default function VerificationPage() {
 
   const openNotifTab = useCallback(async () => {
     setActivePageTab("send_notification");
-    if (allUsers.length > 0) return;
-    setUsersLoading(true);
-    try {
-      const snap = await getDocs(query(collection(db, "users"), orderBy("name")));
-      setAllUsers(snap.docs.map((d) => ({
-        id: d.id,
-        name: d.data().name ?? "No Name",
-        email: d.data().email ?? "",
-        phone: d.data().phone ?? "",
-        photoUrl: d.data().photoUrl ?? d.data().photoURL ?? "",
-      })));
-    } finally {
-      setUsersLoading(false);
-    }
-  }, [allUsers.length]);
+    await loadAllUsers();
+  }, [loadAllUsers]);
 
   const notifFinalMessage = useMemo(() => {
     if (!notifPreset) return "";
@@ -905,6 +984,7 @@ export default function VerificationPage() {
       });
       setSelected(null);
       setActionMode(null);
+      setJumpToReqUserId(approvedUser.userId);
       setNotifUser({ id: approvedUser.userId, name: approvedUser.name, email: approvedUser.email, phone: approvedUser.phone, photoUrl: approvedUser.photoUrl });
       setNotifUserSearch(approvedUser.name);
       setNotifPreset("verified");
@@ -923,13 +1003,18 @@ export default function VerificationPage() {
     const rejectedUser = selected;
     const reason = rejectReason.trim();
     try {
-      await updateDoc(doc(db, "verification_requests", selected.id), {
-        status: "rejected",
-        reviewedAt: serverTimestamp(),
-        reviewedBy: user.displayName ?? user.email ?? user.uid,
-        rejectReason: reason,
-        updatedAt: serverTimestamp(),
-      });
+      await Promise.all([
+        updateDoc(doc(db, "verification_requests", selected.id), {
+          status: "rejected",
+          reviewedAt: serverTimestamp(),
+          reviewedBy: user.displayName ?? user.email ?? user.uid,
+          rejectReason: reason,
+          updatedAt: serverTimestamp(),
+        }),
+        updateDoc(doc(db, "users", selected.userId), {
+          isVerified: "unverified",
+        }),
+      ]);
       await writeLog({
         actorId: user.uid,
         actorName: user.displayName ?? "Admin",
@@ -943,6 +1028,7 @@ export default function VerificationPage() {
       setSelected(null);
       setActionMode(null);
       setRejectReason("");
+      setJumpToReqUserId(rejectedUser.userId);
       setNotifUser({ id: rejectedUser.userId, name: rejectedUser.name, email: rejectedUser.email, phone: rejectedUser.phone, photoUrl: rejectedUser.photoUrl });
       setNotifUserSearch(rejectedUser.name);
       setNotifPreset("not_approved");
@@ -964,6 +1050,11 @@ export default function VerificationPage() {
     rejected: requests.filter((r) => r.status === "rejected").length,
     cancelled: requests.filter((r) => r.status === "cancelled").length,
   }), [requests]);
+
+  const notifLinkedRequest = useMemo(
+    () => (notifUser ? requests.find((r) => r.userId === notifUser.id) ?? null : null),
+    [notifUser, requests]
+  );
 
   const notifStats = useMemo(() => ({
     total: notifDocs.length,
@@ -994,6 +1085,18 @@ export default function VerificationPage() {
     });
     return result;
   }, [notifDocs, notifStatusFilter, notifSearch, notifSortOrder, notifDateFrom, notifDateTo]);
+
+  useEffect(() => { setNotifPage(1); }, [notifSearch, notifStatusFilter, notifSortOrder, notifDateFrom, notifDateTo]);
+
+  const notifTotalPages = Math.max(1, Math.ceil(filteredNotifDocs.length / PAGE_SIZE));
+  const notifPaginated = filteredNotifDocs.slice((notifPage - 1) * PAGE_SIZE, notifPage * PAGE_SIZE);
+  const notifPageNums = Array.from({ length: notifTotalPages }, (_, i) => i + 1)
+    .filter((p) => p === 1 || p === notifTotalPages || Math.abs(p - notifPage) <= 1)
+    .reduce<(number | "…")[]>((acc, p, i, arr) => {
+      if (i > 0 && (p as number) - (arr[i - 1] as number) > 1) acc.push("…");
+      acc.push(p);
+      return acc;
+    }, []);
 
   // ─── Filtered + paginated ─────────────────────────────────────────────────
 
@@ -1047,31 +1150,7 @@ export default function VerificationPage() {
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* ── Stats bar ── */
-        // .vr-stats {
-        //   display: grid; grid-template-columns: repeat(4, 1fr);
-        //   gap: 10px; margin-bottom: 16px;
-        // }
-        // .vr-stat {
-        //   background: var(--bg-surface); border: 1px solid var(--border);
-        //   border-radius: var(--radius); padding: 14px 16px;
-        //   display: flex; flex-direction: column; gap: 4px;
-        //   transition: border-color 0.15s;
-        // }
-        // .vr-stat[data-clickable="true"] { cursor: pointer; }
-        // .vr-stat[data-clickable="true"]:hover { border-color: var(--border-strong); }
-        // .vr-stat-label {
-        //   font-size: 11px; font-weight: 700; text-transform: uppercase;
-        //   letter-spacing: 0.7px; color: var(--text-muted);
-        // }
-        // .vr-stat-value {
-        //   font-size: 26px; font-weight: 700; color: var(--text-primary); line-height: 1;
-        // }
-        // .vr-stat--pending  .vr-stat-value { color: var(--yellow); }
-        // .vr-stat--verified .vr-stat-value { color: var(--green); }
-        // .vr-stat--rejected .vr-stat-value { color: var(--red); }
-
-        /* ── Stats Bar (Updated UI) ── */
+        /* ── Stats Bar ── */
 .vr-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1590,7 +1669,7 @@ export default function VerificationPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredNotifDocs.map((n) => (
+                  {notifPaginated.map((n) => (
                     <tr key={n.id}>
                       <td>
                         <div className="vr-name" style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -1670,6 +1749,34 @@ export default function VerificationPage() {
               </table>
             )}
           </div>
+
+          {/* Pagination */}
+            <div className="vr-pagination">
+              <span className="vr-pagination-info">
+                {(notifPage - 1) * PAGE_SIZE + 1}–{Math.min(notifPage * PAGE_SIZE, filteredNotifDocs.length)} of {filteredNotifDocs.length}
+              </span>
+              <div className="vr-pagination-btns">
+                <button className="vr-page-btn" onClick={() => setNotifPage(1)} disabled={notifPage === 1}>«</button>
+                <button className="vr-page-btn" onClick={() => setNotifPage((p) => Math.max(1, p - 1))} disabled={notifPage === 1}>
+                  <ChevronLeft size={13} />
+                </button>
+                {notifPageNums.map((p, i) =>
+                  p === "…" ? (
+                    <span key={`e-${i}`} style={{ fontSize: 12, color: "var(--text-muted)", padding: "0 2px" }}>…</span>
+                  ) : (
+                    <button
+                      key={p}
+                      className={`vr-page-btn${notifPage === p ? " active" : ""}`}
+                      onClick={() => setNotifPage(p as number)}
+                    >{p}</button>
+                  )
+                )}
+                <button className="vr-page-btn" onClick={() => setNotifPage((p) => Math.min(notifTotalPages, p + 1))} disabled={notifPage === notifTotalPages}>
+                  <ChevronRight size={13} />
+                </button>
+                <button className="vr-page-btn" onClick={() => setNotifPage(notifTotalPages)} disabled={notifPage === notifTotalPages}>»</button>
+              </div>
+            </div>
         </>
       )}
 
@@ -1854,7 +1961,12 @@ export default function VerificationPage() {
                         )}
                       </div>
                     </td>
-                    <td style={{ fontSize: 12, color: "var(--text-muted)" }}>{fmtDate(r.submittedAt)}</td>
+                    <td style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      {fmtDate(r.submittedAt)}
+                      {r.status === "pending" && (
+                        <AgeBadge days={getAgeDays(r.submittedAt)} />
+                      )}
+                    </td>
                     <td>
                       <span style={{
                         display: "inline-flex", alignItems: "center", gap: 5,
@@ -2004,7 +2116,7 @@ export default function VerificationPage() {
               <div>
                 <div className="vr-detail-name">{selected.name}</div>
                 <div className="vr-detail-uid">{selected.userId}</div>
-                <div style={{ marginTop: 6 }}>
+                <div style={{ marginTop: 6, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
                   <span style={{
                     display: "inline-flex", alignItems: "center", gap: 5,
                     fontSize: 12, fontWeight: 600, textTransform: "capitalize",
@@ -2014,6 +2126,9 @@ export default function VerificationPage() {
                     {STATUS_BADGE[selected.status]?.icon}
                     {selected.status}
                   </span>
+                  {selected.status === "pending" && (
+                    <AgeBadge days={getAgeDays(selected.submittedAt)} inline />
+                  )}
                 </div>
               </div>
             </div>
@@ -2162,15 +2277,22 @@ export default function VerificationPage() {
               History
             </div>
 
-            <div style={{
-              background: "var(--bg-elevated)",
-              border: "1px solid var(--border)",
-              borderRadius: 10,
-              padding: "14px 14px 4px",
-              marginBottom: 16,
-              maxHeight: "27vh",
-              overflowY: "auto",
-            }}>
+            <div
+              ref={timelineRef}
+              onScroll={() => {
+                if (selected && timelineRef.current)
+                  scrollPositions.current.set(selected.id, timelineRef.current.scrollTop);
+              }}
+              style={{
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border)",
+                borderRadius: 10,
+                padding: "14px 14px 4px",
+                marginBottom: 16,
+                maxHeight: "27vh",
+                overflowY: "auto",
+              }}
+            >
               {timelineLoading ? (
                 <div className="vr-timeline-loading">Loading history…</div>
               ) : timeline.length === 0 ? (
@@ -2317,6 +2439,36 @@ export default function VerificationPage() {
             <div className="vr-notif-success">
               <CheckCircle size={15} />
               Notification sent successfully.
+            </div>
+          )}
+
+          {/* Jump-to-request link (shown after approve/reject redirect) */}
+          {notifLinkedRequest && (
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "9px 14px", borderRadius: 8,
+              background: "var(--bg-elevated)", border: "1px solid var(--border)",
+              fontSize: 13,
+            }}>
+              <span style={{ color: "var(--text-secondary)" }}>
+                Sending notification for <strong>{notifLinkedRequest.name}</strong>
+              </span>
+              <button
+                onClick={() => {
+                  setSelected(notifLinkedRequest);
+                  setActionMode(null);
+                  setRejectReason("");
+                  setNoteText("");
+                }}
+                style={{
+                  fontSize: 12, fontWeight: 600, color: "var(--blue)",
+                  background: "none", border: "none", cursor: "pointer",
+                  padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap",
+                  transition: "opacity 0.15s",
+                }}
+              >
+                View request →
+              </button>
             </div>
           )}
 
