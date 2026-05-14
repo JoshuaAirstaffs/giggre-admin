@@ -1448,7 +1448,7 @@ export default function VerificationPage() {
         .vr-user-row:last-child { border-bottom: none; }
         .vr-user-row:hover { background: var(--bg-hover); }
         .vr-user-row.selected { background: color-mix(in srgb, var(--blue) 10%, transparent); }
-        .vr-user-row.has-request { opacity: 0.5; pointer-events: none; }
+        .vr-user-row.has-request { opacity: 0.7; }
         .vr-user-avatar {
           width: 34px; height: 34px; border-radius: 50%;
           background: var(--bg-elevated); border: 1px solid var(--border);
@@ -1566,7 +1566,7 @@ export default function VerificationPage() {
               { key: "total",      label: "Total",      color: "var(--blue)" },
               { key: "pending",    label: "Pending",    color: "var(--orange)" },
               { key: "verified",   label: "Verified",   color: "var(--green)" },
-              { key: "unverified", label: "Unverified", color: "var(--red)" },
+              { key: "unverified", label: "Rejected", color: "var(--red)" },
             ] as const).map(({ key, label, color }) => (
               <div
                 key={key}
@@ -1604,7 +1604,7 @@ export default function VerificationPage() {
                   className={`vr-tab${notifStatusFilter === s ? " active" : ""}`}
                   onClick={() => setNotifStatusFilter(s)}
                 >
-                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                  {s === "unverified" ? "Rejected" : s.charAt(0).toUpperCase() + s.slice(1)}
                   {s === "pending" && notifStats.pending > 0 && (
                     <span className="vr-badge-count">{notifStats.pending}</span>
                   )}
@@ -1725,7 +1725,7 @@ export default function VerificationPage() {
                             {n.verification_status === "verified" ? <CheckCircle size={12} />
                               : n.verification_status === "pending" ? <Clock size={12} />
                               : <XCircle size={12} />}
-                            {n.verification_status}
+                            {n.verification_status === "unverified" ? "Rejected" : n.verification_status}
                           </span>
                         ) : "—"}
                       </td>
@@ -2060,7 +2060,7 @@ export default function VerificationPage() {
                   <div
                     key={u.id}
                     className={`vr-user-row${isPicked ? " selected" : ""}${hasExisting ? " has-request" : ""}`}
-                    onClick={() => !hasExisting && setPickedUser(isPicked ? null : u)}
+                    onClick={() => setPickedUser(isPicked ? null : u)}
                   >
                     <div className="vr-user-avatar">
                       {u.photoUrl ? <img src={u.photoUrl} alt={u.name} /> : <User size={16} />}
@@ -2069,8 +2069,8 @@ export default function VerificationPage() {
                       <div className="vr-user-name">{u.name}</div>
                       <div className="vr-user-meta">{u.email}{u.phone ? ` · ${u.phone}` : ""}</div>
                     </div>
-                    {hasExisting && <span className="vr-has-badge">has request</span>}
-                    {isPicked && !hasExisting && <CheckCircle size={16} style={{ color: "var(--blue)", flexShrink: 0 }} />}
+                    {/* {hasExisting && <span className="vr-has-badge">has request</span>} */}
+                    {isPicked && <CheckCircle size={16} style={{ color: "var(--blue)", flexShrink: 0 }} />}
                   </div>
                 );
               })
