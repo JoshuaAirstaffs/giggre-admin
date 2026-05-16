@@ -3,40 +3,43 @@
 import React, { useEffect, useState, useMemo, useRef } from "react"
 import {
   collection, getDocs, onSnapshot, orderBy, query, doc, updateDoc,
-  addDoc, serverTimestamp, Timestamp, where, limit,
+  serverTimestamp, Timestamp, where, limit,
 } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import "./userRequestsStyle.css"
 import Modal from "@/components/ui/Modal"
-import { Eye, Check, X, Plus, RefreshCw, Search, Upload, User, ChevronUp, ChevronDown, RotateCcw, Calendar, FileText, CheckCircle2, XCircle, Clock, MessageSquare, Send } from "lucide-react"
+import { Eye, Check, X, RefreshCw, Search, User, ChevronUp, ChevronDown, RotateCcw, Calendar, FileText, CheckCircle2, XCircle, MessageSquare, Send } from "lucide-react"
 import { toast } from "@/components/ui/Toaster"
-import { generateTicketNumber } from "../utils/generateTicketNumber"
-import { useAuth } from "@/context/AuthContext"
 import { writeLog, buildDescription } from "@/lib/activitylog"
+import { useAuth } from "@/context/AuthContext"
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type RequestType = "skill" | "host_eligible_reward_skill"
 type RequestStatus = "pending" | "approved" | "rejected"
 
-interface UserRequest {
-  id: string
-  ticket_number: string
-  cert_photo_url: string
-  isApproved: boolean | null
-  rejection_reason: string
-  request_type: RequestType
-  skill_name: string
-  userId: string
-  userName: string
-  userEmail: string
-  createdAt: Timestamp
-}
-
-interface Skill {
+interface SkillRequest {
   id: string
   skillId: string
-  name: string
+  skillName: string
+  skillCategory: string
+  skill_req_Id: string
+  status: RequestStatus
+  userId: string
+  gigWorkerId: string
+  userName: string
+  userEmail: string
+  reason: string
+  relatedExperience: string
+  experienceLevel: string
+  experienceDuration: string
+  contactAvailability: string
+  proofNames: string[]
+  proofPaths: string[]
+  proofUrls: string[]
+  adminRemarks: string
+  suggestedRequirement: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
 }
 
 interface FoundUser {
@@ -60,26 +63,7 @@ const TIMELINE_CONFIG: Record<TimelineEntry["action"], { label: string; color: s
   user_request_note:      { label: "Note",         color: "var(--text-secondary)", glow: "rgba(100,116,139,0.18)", icon: MessageSquare },
 }
 
-const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
-  skill: "Skill",
-  host_eligible_reward_skill: "Host-Eligible Reward Skill",
-}
-
-const EMPTY_FORM = {
-  request_type: "skill" as RequestType,
-  skill_name: "",
-  cert_photo_url: "",
-  isApproved: null as boolean | null,
-  rejection_reason: "",
-}
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-const deriveStatus = (isApproved: boolean | null | undefined): RequestStatus => {
-  if (isApproved === true)  return "approved"
-  if (isApproved === false) return "rejected"
-  return "pending"
-}
 
 const formatDate = (ts: Timestamp) =>
   ts?.toDate?.().toLocaleString("en-US", {
@@ -99,26 +83,22 @@ const daysSince = (ts: Timestamp): number => {
 // ── Component ────────────────────────────────────────────────────────────────
 
 const UserRequests = () => {
-  const [requests, setRequests]   = useState<UserRequest[]>([])
+  const [requests, setRequests]   = useState<SkillRequest[]>([])
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
 
-  // skills
-  const [skills, setSkills]           = useState<Skill[]>([])
-  const [loadingSkills, setLoadingSkills] = useState(false)
-
   // filters
   const [search, setSearch]             = useState("")
   const [filterStatus, setFilterStatus] = useState<RequestStatus | "">("")
-  const [filterType, setFilterType]     = useState<RequestType | "">("")
+  const [filterCategory, setFilterCategory] = useState("")
   const [dateFrom, setDateFrom]         = useState("")
   const [dateTo, setDateTo]             = useState("")
   const [filterUserId, setFilterUserId] = useState<string | null>(null)
   const [filterUserName, setFilterUserName] = useState<string>("")
 
   // view modal
-  const [viewItem, setViewItem]               = useState<UserRequest | null>(null)
+  const [viewItem, setViewItem]               = useState<SkillRequest | null>(null)
   const [timeline, setTimeline]               = useState<TimelineEntry[]>([])
   const [timelineLoading, setTimelineLoading] = useState(false)
   const [timelineKey, setTimelineKey]         = useState(0)
@@ -126,81 +106,42 @@ const UserRequests = () => {
   const [addingNote, setAddingNote]           = useState(false)
 
   // reject modal
-  const [rejectTarget, setRejectTarget]       = useState<UserRequest | null>(null)
+  const [rejectTarget, setRejectTarget]       = useState<SkillRequest | null>(null)
   const [rejectionReason, setRejectionReason] = useState("")
   const [rejecting, setRejecting]             = useState(false)
 
-  // single loading tracker for approve / reopen (reject uses its own `rejecting`)
+  // single loading tracker for approve / reopen
   const [mutatingId, setMutatingId] = useState<string | null>(null)
-
-  // create modal
-  const [showCreate, setShowCreate]     = useState(false)
-  const [createForm, setCreateForm]     = useState(EMPTY_FORM)
-  const [creating, setCreating]         = useState(false)
-
-  // user search (inside create modal)
-  const [userSearch, setUserSearch]         = useState("")
-  const [userResults, setUserResults]       = useState<FoundUser[]>([])
-  const [showUserDrop, setShowUserDrop]     = useState(false)
-  const [searchingUser, setSearchingUser]   = useState(false)
-  const [selectedUser, setSelectedUser]     = useState<FoundUser | null>(null)
-  const userDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const userWrapRef     = useRef<HTMLDivElement>(null)
-
-  // skill search (inside create modal)
-  const [skillSearch, setSkillSearch]       = useState("")
-  const [showSkillDrop, setShowSkillDrop]   = useState(false)
-  const skillWrapRef = useRef<HTMLDivElement>(null)
 
   // sort & pagination
   const [sortDir, setSortDir]   = useState<"desc" | "asc">("desc")
   const [page, setPage]         = useState(1)
   const PAGE_SIZE               = 20
 
-  // photo upload (UI only – no storage yet)
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
-  const photoInputRef = useRef<HTMLInputElement>(null)
-
   // auth
   const { user } = useAuth()
 
   // ── Init ─────────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    fetchSkills()
-  }, [])
-
   // Real-time listener — re-subscribes when refreshKey bumps
   useEffect(() => {
     setLoading(true)
     setError(null)
-    const q = query(collection(db, "user_requests"), orderBy("createdAt", "desc"))
+    const q = query(collection(db, "skill_requests"), orderBy("createdAt", "desc"))
     const unsub = onSnapshot(
       q,
       snap => {
-        setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })) as UserRequest[])
+        setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })) as SkillRequest[])
         setLoading(false)
       },
       err => {
-        console.error("Failed to listen to user requests:", err)
-        setError("Failed to load user requests.")
+        console.error("Failed to listen to skill requests:", err)
+        setError("Failed to load skill requests.")
         setLoading(false)
       },
     )
     return unsub
   }, [refreshKey])
-
-  // close dropdowns on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (userWrapRef.current && !userWrapRef.current.contains(e.target as Node))
-        setShowUserDrop(false)
-      if (skillWrapRef.current && !skillWrapRef.current.contains(e.target as Node))
-        setShowSkillDrop(false)
-    }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-  }, [])
 
   // ── Timeline fetch (fires when view modal opens) ─────────────────────────
 
@@ -227,7 +168,6 @@ const UserRequests = () => {
         .filter(e => e.action in TIMELINE_CONFIG && e.action !== "submitted")
         .sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0))
 
-      // Prepend the original submission as the first entry
       const submitted: TimelineEntry = {
         action:    "submitted",
         actorName: viewItem.userName || "User",
@@ -237,109 +177,9 @@ const UserRequests = () => {
       setTimeline([submitted, ...logEntries])
     }).catch((err: unknown) => {
       console.error("Failed to fetch timeline:", err)
-      // If this still fails, check Firestore indexes in your Firebase console
       setTimeline([])
     }).finally(() => setTimelineLoading(false))
   }, [viewItem?.id, timelineKey])
-
-  // ── Firestore fetches ────────────────────────────────────────────────────
-
-  const fetchSkills = async () => {
-    try {
-      setLoadingSkills(true)
-      const snap = await getDocs(query(collection(db, "skills"), orderBy("createdAt", "asc")))
-      const list: Skill[] = []
-      snap.forEach(d => {
-        if (d.id.startsWith("_")) return
-        const data = d.data()
-        list.push({ id: d.id, skillId: data.skillId ?? d.id, name: data.name ?? "" })
-      })
-      setSkills(list)
-    } catch (err) {
-      console.error("Failed to fetch skills:", err)
-    } finally {
-      setLoadingSkills(false)
-    }
-  }
-
-  // ── User search ──────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (userDebounceRef.current) clearTimeout(userDebounceRef.current)
-
-    const q = userSearch.trim()
-    if (!q) {
-      setUserResults([])
-      setShowUserDrop(false)
-      setSearchingUser(false)
-      return
-    }
-
-    setSearchingUser(true)
-
-    userDebounceRef.current = setTimeout(async () => {
-      try {
-        const seen = new Set<string>()
-        const merged: FoundUser[] = []
-
-        const push = (d: { id: string; data: () => Record<string, unknown> }) => {
-          if (!seen.has(d.id)) {
-            seen.add(d.id)
-            const data = d.data()
-            merged.push({ id: String(data.userId ?? d.id), name: String(data.name ?? ""), email: String(data.email ?? "") })
-          }
-        }
-
-        // All 3 queries fire in parallel
-        const [byUserId, nameSnap, emailSnap] = await Promise.all([
-          getDocs(query(collection(db, "users"), where("userId", "==", q), limit(1))),
-          getDocs(query(collection(db, "users"), where("name", ">=", q), where("name", "<=", q + "\uf8ff"), orderBy("name"), limit(8))),
-          getDocs(query(collection(db, "users"), where("email", ">=", q.toLowerCase()), where("email", "<=", q.toLowerCase() + "\uf8ff"), orderBy("email"), limit(8))),
-        ])
-        byUserId.forEach(d => push(d))
-        nameSnap.forEach(d => push(d))
-        emailSnap.forEach(d => push(d))
-
-        setUserResults(merged.slice(0, 10))
-        setShowUserDrop(merged.length > 0)
-      } catch (err) {
-        console.error("User search failed:", err)
-        setUserResults([])
-        setShowUserDrop(false)
-      } finally {
-        setSearchingUser(false)
-      }
-    }, 300)
-
-    return () => { if (userDebounceRef.current) clearTimeout(userDebounceRef.current) }
-  }, [userSearch])
-
-  const selectUser = (u: FoundUser) => {
-    setSelectedUser(u)
-    setUserSearch("")
-    setShowUserDrop(false)
-    setUserResults([])
-  }
-
-  const clearUser = () => {
-    setSelectedUser(null)
-    setUserSearch("")
-  }
-
-  // ── Photo upload handler (UI only) ───────────────────────────────────────
-
-  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => setPhotoPreview(reader.result as string)
-    reader.readAsDataURL(file)
-  }
-
-  const clearPhoto = () => {
-    setPhotoPreview(null)
-    if (photoInputRef.current) photoInputRef.current.value = ""
-  }
 
   // ── Filtered list ────────────────────────────────────────────────────────
 
@@ -349,17 +189,19 @@ const UserRequests = () => {
     const toMs   = dateTo   ? new Date(dateTo).setHours(23, 59, 59, 999) : null
     const filtered = requests.filter(r => {
       const matchesSearch = !q
-        || r.ticket_number?.toLowerCase().includes(q)
+        || r.skill_req_Id?.toLowerCase().includes(q)
+        || r.skillId?.toLowerCase().includes(q)
         || r.userName?.toLowerCase().includes(q)
         || r.userEmail?.toLowerCase().includes(q)
-        || r.skill_name?.toLowerCase().includes(q)
-      const matchesStatus = !filterStatus  || deriveStatus(r.isApproved) === filterStatus
-      const matchesType   = !filterType    || r.request_type === filterType
-      const matchesUser   = !filterUserId  || r.userId === filterUserId
+        || r.skillName?.toLowerCase().includes(q)
+        || r.skillCategory?.toLowerCase().includes(q)
+      const matchesStatus   = !filterStatus   || r.status === filterStatus
+      const matchesCategory = !filterCategory || r.skillCategory?.toLowerCase() === filterCategory.toLowerCase()
+      const matchesUser     = !filterUserId   || r.userId === filterUserId
       const rMs = r.createdAt?.toMillis?.() ?? 0
       const matchesFrom = fromMs === null || rMs >= fromMs
       const matchesTo   = toMs   === null || rMs <= toMs
-      return matchesSearch && matchesStatus && matchesType && matchesUser && matchesFrom && matchesTo
+      return matchesSearch && matchesStatus && matchesCategory && matchesUser && matchesFrom && matchesTo
     })
     filtered.sort((a, b) => {
       const aMs = a.createdAt?.toMillis?.() ?? 0
@@ -367,14 +209,14 @@ const UserRequests = () => {
       return sortDir === "desc" ? bMs - aMs : aMs - bMs
     })
     return filtered
-  }, [requests, search, filterStatus, filterType, sortDir, dateFrom, dateTo, filterUserId])
+  }, [requests, search, filterStatus, filterCategory, sortDir, dateFrom, dateTo, filterUserId])
 
-  const hasActiveFilters = search || filterStatus || filterType || dateFrom || dateTo || filterUserId
+  const hasActiveFilters = search || filterStatus || filterCategory || dateFrom || dateTo || filterUserId
 
   const clearFilters = () => {
     setSearch("")
     setFilterStatus("")
-    setFilterType("")
+    setFilterCategory("")
     setDateFrom("")
     setDateTo("")
     setFilterUserId(null)
@@ -387,19 +229,26 @@ const UserRequests = () => {
   }
 
   // reset to page 1 whenever filters/sort change
-  useEffect(() => { setPage(1) }, [search, filterStatus, filterType, sortDir, dateFrom, dateTo, filterUserId])
+  useEffect(() => { setPage(1) }, [search, filterStatus, filterCategory, sortDir, dateFrom, dateTo, filterUserId])
 
-  const totalPages       = Math.max(1, Math.ceil(filteredRequests.length / PAGE_SIZE))
+  const totalPages        = Math.max(1, Math.ceil(filteredRequests.length / PAGE_SIZE))
   const paginatedRequests = filteredRequests.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   // ── Counts ───────────────────────────────────────────────────────────────
 
   const counts = useMemo(() =>
     requests.reduce(
-      (acc, r) => { acc.total++; acc[deriveStatus(r.isApproved)]++; return acc },
-      { total: 0, pending: 0, approved: 0, rejected: 0 },
+      (acc, r) => { acc.total++; acc[r.status ?? "pending"]++; return acc },
+      { total: 0, pending: 0, approved: 0, rejected: 0 } as Record<string, number>,
     )
   , [requests])
+
+  // distinct skill categories derived from data
+  const skillCategories = useMemo(() => {
+    const cats = new Set<string>()
+    requests.forEach(r => { if (r.skillCategory) cats.add(r.skillCategory) })
+    return Array.from(cats).sort()
+  }, [requests])
 
   // request count per user
   const userRequestCount = useMemo(() => {
@@ -408,11 +257,11 @@ const UserRequests = () => {
     return map
   }, [requests])
 
-  // duplicate detection: userId + skill_name combos that appear more than once
+  // duplicate detection: userId + skillName combos that appear more than once
   const duplicateKeys = useMemo(() => {
     const seen = new Map<string, number>()
     requests.forEach(r => {
-      const key = `${r.userId}::${r.skill_name?.toLowerCase()}::${r.request_type}`
+      const key = `${r.userId}::${r.skillName?.toLowerCase()}::${r.skillCategory}`
       seen.set(key, (seen.get(key) ?? 0) + 1)
     })
     const dupes = new Set<string>()
@@ -422,12 +271,13 @@ const UserRequests = () => {
 
   // ── Approve ──────────────────────────────────────────────────────────────
 
-  const handleApprove = async (request: UserRequest) => {
+  const handleApprove = async (request: SkillRequest) => {
     try {
       setMutatingId(request.id)
-      await updateDoc(doc(db, "user_requests", request.id), {
-        isApproved: true,
-        rejection_reason: "",
+      await updateDoc(doc(db, "skill_requests", request.id), {
+        status: "approved",
+        adminRemarks: "",
+        updatedAt: serverTimestamp(),
       })
       toast.success("Request approved")
       writeLog({
@@ -436,10 +286,10 @@ const UserRequests = () => {
         actorEmail: user?.email ?? "",
         module:     "user_requests",
         action:     "user_request_approved",
-        description: buildDescription.userRequestApproved(request.ticket_number, request.skill_name, request.userName),
+        description: buildDescription.userRequestApproved(request.skill_req_Id, request.skillName, request.userName),
         targetId:   request.id,
-        targetName: request.ticket_number,
-        meta: { other: { skillName: request.skill_name, userId: request.userId } },
+        targetName: request.skill_req_Id,
+        meta: { other: { skillName: request.skillName, userId: request.userId } },
       })
     } catch (err) {
       console.error("Approve failed:", err)
@@ -451,9 +301,9 @@ const UserRequests = () => {
 
   // ── Reject ───────────────────────────────────────────────────────────────
 
-  const openRejectModal = (request: UserRequest) => {
+  const openRejectModal = (request: SkillRequest) => {
     setRejectTarget(request)
-    setRejectionReason(request.rejection_reason ?? "")
+    setRejectionReason(request.adminRemarks ?? "")
   }
 
   const handleReject = async () => {
@@ -461,9 +311,10 @@ const UserRequests = () => {
     try {
       setRejecting(true)
       const reason = rejectionReason.trim()
-      await updateDoc(doc(db, "user_requests", rejectTarget.id), {
-        isApproved: false,
-        rejection_reason: reason,
+      await updateDoc(doc(db, "skill_requests", rejectTarget.id), {
+        status: "rejected",
+        adminRemarks: reason,
+        updatedAt: serverTimestamp(),
       })
       toast.success("Request rejected")
       writeLog({
@@ -472,10 +323,10 @@ const UserRequests = () => {
         actorEmail: user?.email ?? "",
         module:     "user_requests",
         action:     "user_request_rejected",
-        description: buildDescription.userRequestRejected(rejectTarget.ticket_number, rejectTarget.skill_name, rejectTarget.userName, reason),
+        description: buildDescription.userRequestRejected(rejectTarget.skill_req_Id, rejectTarget.skillName, rejectTarget.userName, reason),
         targetId:   rejectTarget.id,
-        targetName: rejectTarget.ticket_number,
-        meta: { other: { skillName: rejectTarget.skill_name, userId: rejectTarget.userId, reason } },
+        targetName: rejectTarget.skill_req_Id,
+        meta: { other: { skillName: rejectTarget.skillName, userId: rejectTarget.userId, reason } },
       })
       setRejectTarget(null)
       setRejectionReason("")
@@ -489,12 +340,13 @@ const UserRequests = () => {
 
   // ── Reopen ───────────────────────────────────────────────────────────────
 
-  const handleReopen = async (request: UserRequest) => {
+  const handleReopen = async (request: SkillRequest) => {
     try {
       setMutatingId(request.id)
-      await updateDoc(doc(db, "user_requests", request.id), {
-        isApproved: null,
-        rejection_reason: "",
+      await updateDoc(doc(db, "skill_requests", request.id), {
+        status: "pending",
+        adminRemarks: "",
+        updatedAt: serverTimestamp(),
       })
       toast.success("Request reopened")
       writeLog({
@@ -503,10 +355,10 @@ const UserRequests = () => {
         actorEmail: user?.email ?? "",
         module:     "user_requests",
         action:     "user_request_reopened",
-        description: buildDescription.userRequestReopened(request.ticket_number, request.skill_name, request.userName),
+        description: buildDescription.userRequestReopened(request.skill_req_Id, request.skillName, request.userName),
         targetId:   request.id,
-        targetName: request.ticket_number,
-        meta: { other: { skillName: request.skill_name, userId: request.userId } },
+        targetName: request.skill_req_Id,
+        meta: { other: { skillName: request.skillName, userId: request.userId } },
       })
     } catch (err) {
       console.error("Reopen failed:", err)
@@ -531,11 +383,11 @@ const UserRequests = () => {
         action:      "user_request_note",
         description: note,
         targetId:    viewItem.id,
-        targetName:  viewItem.ticket_number,
-        meta: { other: { skillName: viewItem.skill_name, userId: viewItem.userId } },
+        targetName:  viewItem.skill_req_Id,
+        meta: { other: { skillName: viewItem.skillName, userId: viewItem.userId } },
       })
       setNoteText("")
-      setTimelineKey(k => k + 1)   // re-fetch timeline
+      setTimelineKey(k => k + 1)
     } catch (err) {
       console.error("Add note failed:", err)
       toast.error("Failed to save note")
@@ -544,65 +396,16 @@ const UserRequests = () => {
     }
   }
 
-  // ── Create ───────────────────────────────────────────────────────────────
-
-  // filtered skills for the search dropdown
-  const filteredSkills = useMemo(() => {
-    const q = skillSearch.toLowerCase().trim()
-    if (!q) return skills
-    return skills.filter(s =>
-      s.name.toLowerCase().includes(q) ||
-      s.skillId.toLowerCase().includes(q)
-    )
-  }, [skills, skillSearch])
-
-  const resetCreateModal = () => {
-    setShowCreate(false)
-    setCreateForm(EMPTY_FORM)
-    setSelectedUser(null)
-    setUserSearch("")
-    setSkillSearch("")
-    setShowSkillDrop(false)
-    setPhotoPreview(null)
-    if (photoInputRef.current) photoInputRef.current.value = ""
-  }
-
-  const handleCreate = async () => {
-    if (!createForm.skill_name.trim()) return
-    if (!selectedUser) return
-    if (createForm.isApproved === false && !createForm.rejection_reason.trim()) return
-    try {
-      setCreating(true)
-      const ticket_number = await generateTicketNumber()
-      await addDoc(collection(db, "user_requests"), {
-        ...createForm,
-        ticket_number,
-        cert_photo_url: createForm.cert_photo_url.trim(),
-        userId:    selectedUser.id,
-        userName:  selectedUser.name,
-        userEmail: selectedUser.email,
-        createdAt: serverTimestamp(),
-      })
-      toast.success("Request created successfully")
-      resetCreateModal()
-    } catch (err) {
-      console.error("Create failed:", err)
-      toast.error("Failed to create request")
-    } finally {
-      setCreating(false)
-    }
-  }
-
   // ── Status badge helper ───────────────────────────────────────────────────
 
-  const statusBadge = (isApproved: boolean | null | undefined) => {
-    const status = deriveStatus(isApproved)
+  const statusBadge = (status: RequestStatus | undefined) => {
+    const s = status ?? "pending"
     const cls: Record<RequestStatus, string> = {
       pending:  "ur-badge ur-badge--pending",
       approved: "ur-badge ur-badge--approved",
       rejected: "ur-badge ur-badge--rejected",
     }
-    return <span className={cls[status]}>{status}</span>
+    return <span className={cls[s]}>{s}</span>
   }
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -618,7 +421,7 @@ const UserRequests = () => {
         {(["total", "pending", "approved", "rejected"] as const).map(k => (
           <div key={k} className={`ur-stat-card ur-stat-card--${k}`}>
             <span className="ur-stat-label">{k.charAt(0).toUpperCase() + k.slice(1)}</span>
-            <span className="ur-stat-value">{counts[k]}</span>
+            <span className="ur-stat-value">{counts[k] ?? 0}</span>
           </div>
         ))}
       </div>
@@ -629,7 +432,7 @@ const UserRequests = () => {
           <Search size={14} className="ur-search-icon" />
           <input
             className="ur-search-input"
-            placeholder="Search by ticket, name, email, or skill..."
+            placeholder="Search by ID, name, email, or skill..."
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -667,12 +470,13 @@ const UserRequests = () => {
 
         <select
           className="ur-filter-select"
-          value={filterType}
-          onChange={e => setFilterType(e.target.value as RequestType | "")}
+          value={filterCategory}
+          onChange={e => setFilterCategory(e.target.value)}
         >
-          <option value="">All Types</option>
-          <option value="skill">Skill</option>
-          <option value="host_eligible_reward_skill">Host-Eligible Reward Skill</option>
+          <option value="">All Categories</option>
+          {skillCategories.map(cat => (
+            <option key={cat} value={cat}>{cat}</option>
+          ))}
         </select>
 
         <div className="ur-date-range">
@@ -702,10 +506,6 @@ const UserRequests = () => {
 
         <span className="ur-count">{filteredRequests.length} of {requests.length}</span>
 
-        {/* <button className="ur-create-btn" onClick={() => setShowCreate(true)}>
-          <Plus size={14} /> Create Request
-        </button> */}
-
         <button className="ur-refresh-btn" onClick={() => setRefreshKey(k => k + 1)} title="Refresh">
           <RefreshCw size={14} />
         </button>
@@ -716,9 +516,9 @@ const UserRequests = () => {
         <table className="admins-table">
           <thead>
             <tr>
-              <th>Ticket #</th>
-              <th>Skill Name</th>
-              <th>Request Type</th>
+              <th>Skill ID</th>
+              <th>Skill</th>
+              <th>Level / Duration</th>
               <th>User</th>
               <th>Status</th>
               <th>
@@ -744,12 +544,18 @@ const UserRequests = () => {
             ) : (
               paginatedRequests.map(r => (
                 <tr key={r.id}>
-                  <td><span className="ur-ticket">{r.ticket_number}</span></td>
-                  <td><div className="admin-name">{r.skill_name || "—"}</div></td>
                   <td>
-                    <span className="ur-type-badge">
-                      {REQUEST_TYPE_LABELS[r.request_type] ?? r.request_type ?? "—"}
-                    </span>
+                    {r.skillId
+                      ? <span className="ur-ticket">{r.skillId}</span>
+                      : <span className="ur-badge ur-badge--rejected">not added</span>
+                    }
+                  </td>
+                  <td><div className="admin-name">{r.skillName || "—"}</div></td>
+                  <td style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                    <div>{r.experienceLevel || "—"}</div>
+                    {r.experienceDuration && (
+                      <div style={{ color: "var(--text-muted)" }}>{r.experienceDuration} yr{r.experienceDuration !== "1" ? "s" : ""}</div>
+                    )}
                   </td>
                   <td>
                     <div className="ur-user-cell">
@@ -767,14 +573,14 @@ const UserRequests = () => {
                       )}
                     </div>
                     {r.userEmail && <div className="admin-email">{r.userEmail}</div>}
-                    {duplicateKeys.has(`${r.userId}::${r.skill_name?.toLowerCase()}::${r.request_type}`) && (
+                    {duplicateKeys.has(`${r.userId}::${r.skillName?.toLowerCase()}::${r.skillCategory}`) && (
                       <span className="ur-dup-badge" title="Another request exists for this user + skill">duplicate</span>
                     )}
                   </td>
                   <td>
                     <div className="ur-status-cell">
-                      {statusBadge(r.isApproved)}
-                      {deriveStatus(r.isApproved) === "pending" && r.createdAt && (() => {
+                      {statusBadge(r.status)}
+                      {(r.status ?? "pending") === "pending" && r.createdAt && (() => {
                         const days = daysSince(r.createdAt)
                         return days > 0 ? (
                           <span className={`ur-overdue-badge${days >= 7 ? " ur-overdue-badge--warn" : ""}`}>
@@ -791,7 +597,7 @@ const UserRequests = () => {
                     <button className="icon-btn" title="View details" onClick={() => setViewItem(r)}>
                       <Eye size={13} />
                     </button>
-                    {deriveStatus(r.isApproved) !== "approved" && (
+                    {(r.status ?? "pending") !== "approved" && (
                       <button
                         className="icon-btn ur-approve-btn"
                         title="Approve"
@@ -801,7 +607,7 @@ const UserRequests = () => {
                         <Check size={13} />
                       </button>
                     )}
-                    {deriveStatus(r.isApproved) !== "rejected" && (
+                    {(r.status ?? "pending") !== "rejected" && (
                       <button
                         className="icon-btn danger"
                         title="Reject"
@@ -810,7 +616,7 @@ const UserRequests = () => {
                         <X size={13} />
                       </button>
                     )}
-                    {deriveStatus(r.isApproved) !== "pending" && (
+                    {(r.status ?? "pending") !== "pending" && (
                       <button
                         className="icon-btn ur-reopen-btn"
                         title="Reopen (set back to pending)"
@@ -829,35 +635,18 @@ const UserRequests = () => {
       </div>
 
       {/* Pagination */}
-      
-        <div className="ur-pagination">
-          <button
-            className="ur-page-btn"
-            onClick={() => setPage(1)}
-            disabled={page === 1}
-          >«</button>
-          <button
-            className="ur-page-btn"
-            onClick={() => setPage(p => Math.max(1, p - 1))}
-            disabled={page === 1}
-          >‹</button>
-          <span className="ur-page-info">
-            Page {page} of {totalPages} &nbsp;·&nbsp; {filteredRequests.length} results
-          </span>
-          <button
-            className="ur-page-btn"
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
-          >›</button>
-          <button
-            className="ur-page-btn"
-            onClick={() => setPage(totalPages)}
-            disabled={page === totalPages}
-          >»</button>
-        </div>
+      <div className="ur-pagination">
+        <button className="ur-page-btn" onClick={() => setPage(1)} disabled={page === 1}>«</button>
+        <button className="ur-page-btn" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>‹</button>
+        <span className="ur-page-info">
+          Page {page} of {totalPages} &nbsp;·&nbsp; {filteredRequests.length} results
+        </span>
+        <button className="ur-page-btn" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>›</button>
+        <button className="ur-page-btn" onClick={() => setPage(totalPages)} disabled={page === totalPages}>»</button>
+      </div>
 
       {/* ── View modal ── */}
-      <Modal open={!!viewItem} onClose={() => { setViewItem(null); setNoteText("") }} title="Request Details" size="lg">
+      <Modal open={!!viewItem} onClose={() => { setViewItem(null); setNoteText("") }} title="Skill Request Details" size="lg">
         {viewItem && (
           <div className="ticket-modal">
             <div className="ticket-modal-meta">
@@ -868,7 +657,7 @@ const UserRequests = () => {
               </div>
               <div className="ticket-modal-status">
                 <span className="ticket-modal-label">Status</span>
-                {statusBadge(viewItem.isApproved)}
+                {statusBadge(viewItem.status)}
               </div>
             </div>
 
@@ -876,55 +665,113 @@ const UserRequests = () => {
 
             <div className="ur-detail-grid">
               <div className="ticket-modal-section">
-                <span className="ticket-modal-label">Ticket #</span>
-                <p className="ticket-modal-subject" style={{ fontSize: 14 }}>{viewItem.ticket_number}</p>
-              </div>
-              <div className="ticket-modal-section">
-                <span className="ticket-modal-label">Request Type</span>
-                <p className="ticket-modal-subject" style={{ fontSize: 14 }}>
-                  {REQUEST_TYPE_LABELS[viewItem.request_type] ?? viewItem.request_type ?? "—"}
-                </p>
+                <span className="ticket-modal-label">Skill ID</span>
+                <p className="ticket-modal-subject" style={{ fontSize: 14 }}>{viewItem.skillId || "—"}</p>
               </div>
               <div className="ticket-modal-section">
                 <span className="ticket-modal-label">Skill Name</span>
-                <p className="ticket-modal-subject" style={{ fontSize: 14 }}>{viewItem.skill_name || "—"}</p>
+                <p className="ticket-modal-subject" style={{ fontSize: 14 }}>{viewItem.skillName || "—"}</p>
               </div>
               <div className="ticket-modal-section">
-                <span className="ticket-modal-label">User ID</span>
-                <p className="ticket-modal-message" style={{ wordBreak: "break-all" }}>{viewItem.userId || "—"}</p>
+                <span className="ticket-modal-label">Category</span>
+                <p className="ticket-modal-subject" style={{ fontSize: 14 }}>{viewItem.skillCategory || "—"}</p>
+              </div>
+              <div className="ticket-modal-section">
+                <span className="ticket-modal-label">Experience Level</span>
+                <p className="ticket-modal-subject" style={{ fontSize: 14 }}>{viewItem.experienceLevel || "—"}</p>
+              </div>
+              <div className="ticket-modal-section">
+                <span className="ticket-modal-label">Experience Duration</span>
+                <p className="ticket-modal-subject" style={{ fontSize: 14 }}>
+                  {viewItem.experienceDuration ? `${viewItem.experienceDuration} year${viewItem.experienceDuration !== "1" ? "s" : ""}` : "—"}
+                </p>
               </div>
             </div>
 
-            {viewItem.rejection_reason && (
+            {viewItem.reason && (
               <>
                 <hr className="ticket-modal-divider" />
                 <div className="ticket-modal-section">
-                  <span className="ticket-modal-label">Rejection Reason</span>
-                  <p className="ticket-modal-message ur-rejection-text">{viewItem.rejection_reason}</p>
+                  <span className="ticket-modal-label">Reason</span>
+                  <p className="ticket-modal-message">{viewItem.reason}</p>
                 </div>
               </>
             )}
 
-            <hr className="ticket-modal-divider" />
+            {viewItem.relatedExperience && (
+              <div className="ticket-modal-section" style={{ marginTop: 10 }}>
+                <span className="ticket-modal-label">Related Experience</span>
+                <p className="ticket-modal-message">{viewItem.relatedExperience}</p>
+              </div>
+            )}
 
-            <div className="ticket-modal-section">
-              <span className="ticket-modal-label">Certification Photo</span>
-              {viewItem.cert_photo_url ? (
-                <div className="ur-cert-wrap">
-                  <img src={viewItem.cert_photo_url} alt="Certification" className="ur-cert-img" />
-                  <a href={viewItem.cert_photo_url} target="_blank" rel="noopener noreferrer" className="ur-cert-link">
-                    Open full image
-                  </a>
+            {viewItem.contactAvailability && (
+              <div className="ticket-modal-section" style={{ marginTop: 10 }}>
+                <span className="ticket-modal-label">Contact Availability</span>
+                <p className="ticket-modal-message">{viewItem.contactAvailability}</p>
+              </div>
+            )}
+
+            {viewItem.suggestedRequirement && (
+              <div className="ticket-modal-section" style={{ marginTop: 10 }}>
+                <span className="ticket-modal-label">Suggested Requirement</span>
+                <p className="ticket-modal-message">{viewItem.suggestedRequirement}</p>
+              </div>
+            )}
+
+            {viewItem.adminRemarks && (
+              <>
+                <hr className="ticket-modal-divider" />
+                <div className="ticket-modal-section">
+                  <span className="ticket-modal-label">Admin Remarks</span>
+                  <p className="ticket-modal-message ur-rejection-text">{viewItem.adminRemarks}</p>
                 </div>
-              ) : (
-                <p className="ticket-modal-message">No photo provided.</p>
-              )}
-            </div>
+              </>
+            )}
+
+            {/* Submitted certificates / proof files */}
+            <>
+              <hr className="ticket-modal-divider" />
+              <div className="ticket-modal-section">
+                <span className="ticket-modal-label">Submitted Documents</span>
+                {viewItem.proofUrls && viewItem.proofUrls.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+                    {viewItem.proofUrls.map((url, i) => {
+                      const name = viewItem.proofNames?.[i] ?? `File ${i + 1}`
+                      const ext  = name.split(".").pop()?.toLowerCase() ?? ""
+                      const isImage = ["jpg", "jpeg", "png", "webp", "gif", "bmp"].includes(ext)
+                      const isPdf   = ext === "pdf"
+                      return (
+                        <div key={i} className="ur-cert-wrap" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+                          {isImage ? (
+                            <img src={url} alt={name} className="ur-cert-img" style={{ maxWidth: 260 }} />
+                          ) : isPdf ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "var(--surface-2, #f5f5f5)", borderRadius: 8, border: "1px solid var(--border)" }}>
+                              <FileText size={20} style={{ color: "var(--red)", flexShrink: 0 }} />
+                              <span style={{ fontSize: 13, fontWeight: 500 }}>{name}</span>
+                            </div>
+                          ) : (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "var(--surface-2, #f5f5f5)", borderRadius: 8, border: "1px solid var(--border)" }}>
+                              <FileText size={20} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+                              <span style={{ fontSize: 13, fontWeight: 500 }}>{name}</span>
+                            </div>
+                          )}
+                          <a href={url} target="_blank" rel="noopener noreferrer" className="ur-cert-link" style={{ marginTop: 4 }}>
+                            View / Download
+                          </a>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p className="ticket-modal-message" style={{ marginTop: 6 }}>No documents submitted.</p>
+                )}
+              </div>
+            </>
 
             <hr className="ticket-modal-divider" />
 
             <div className="ticket-modal-footer">
-              <span>User ID: {viewItem.userId || "—"}</span>
               <span>{viewItem.createdAt ? formatDate(viewItem.createdAt) : "—"}</span>
             </div>
 
@@ -965,7 +812,7 @@ const UserRequests = () => {
             )}
 
             {/* ── Add note (pending only) ── */}
-            {deriveStatus(viewItem.isApproved) === "pending" && (
+            {(viewItem.status ?? "pending") === "pending" && (
               <div className="ur-note-box">
                 <textarea
                   className="ur-textarea ur-note-textarea"
@@ -988,7 +835,7 @@ const UserRequests = () => {
               </div>
             )}
 
-            {deriveStatus(viewItem.isApproved) === "pending" && (
+            {(viewItem.status ?? "pending") === "pending" && (
               <div className="ticket-modal-actions">
                 <button
                   className="ticket-btn-cancel ur-reject-action"
@@ -1005,12 +852,9 @@ const UserRequests = () => {
                 </button>
               </div>
             )}
-            {deriveStatus(viewItem.isApproved) !== "pending" && (
+            {(viewItem.status ?? "pending") !== "pending" && (
               <div className="ticket-modal-actions">
-                <button
-                  className="ticket-btn-cancel"
-                  onClick={() => setViewItem(null)}
-                >
+                <button className="ticket-btn-cancel" onClick={() => setViewItem(null)}>
                   Close
                 </button>
                 <button
@@ -1031,7 +875,7 @@ const UserRequests = () => {
       <Modal
         open={!!rejectTarget}
         onClose={() => { setRejectTarget(null); setRejectionReason("") }}
-        title="Reject Request"
+        title="Reject Skill Request"
         size="sm"
       >
         {rejectTarget && (
@@ -1039,10 +883,10 @@ const UserRequests = () => {
             <div className="ticket-modal-section">
               <span className="ticket-modal-label">Request</span>
               <p className="ticket-modal-subject" style={{ fontSize: 14 }}>
-                {rejectTarget.skill_name || rejectTarget.ticket_number}
+                {rejectTarget.skillName || rejectTarget.skill_req_Id}
               </p>
               <span className="ticket-modal-email">
-                {rejectTarget.userName} · {REQUEST_TYPE_LABELS[rejectTarget.request_type] ?? rejectTarget.request_type}
+                {rejectTarget.userName} · {rejectTarget.skillCategory || "—"}
               </span>
             </div>
 
@@ -1050,7 +894,7 @@ const UserRequests = () => {
 
             <div className="ticket-modal-section">
               <label className="ticket-modal-label" htmlFor="ur-rejection-reason">
-                Rejection Reason <span style={{ color: "var(--red)" }}>*</span>
+                Admin Remarks <span style={{ color: "var(--red)" }}>*</span>
               </label>
               <textarea
                 id="ur-rejection-reason"
@@ -1078,273 +922,6 @@ const UserRequests = () => {
             </div>
           </div>
         )}
-      </Modal>
-
-      {/* ── Create request modal ── */}
-      <Modal
-        open={showCreate}
-        onClose={resetCreateModal}
-        title="Create Request"
-        size="md"
-      >
-        <div className="ticket-modal">
-
-          {/* ── User search ── */}
-          <div className="ticket-modal-section">
-            <span className="ticket-modal-label">
-              User <span style={{ color: "var(--red)" }}>*</span>
-            </span>
-
-            {selectedUser ? (
-              /* Selected user card */
-              <div className="ur-user-card">
-                <div className="ur-user-card-avatar">{initials(selectedUser.name)}</div>
-                <div className="ur-user-card-info">
-                  <p className="ur-user-card-name">{selectedUser.name}</p>
-                  <p className="ur-user-card-email">{selectedUser.email}</p>
-                  <p className="ur-user-card-id">{selectedUser.id}</p>
-                </div>
-                <button className="ur-user-card-clear" onClick={clearUser} title="Remove user">
-                  <X size={13} />
-                </button>
-              </div>
-            ) : (
-              /* Search input + dropdown */
-              <div className="ur-user-search-wrap" ref={userWrapRef}>
-                <div className="ur-user-search-field">
-                  <User size={14} className="ur-user-search-icon" />
-                  <input
-                    className="ur-input ur-user-search-input"
-                    placeholder="Search by User ID, name, or email..."
-                    value={userSearch}
-                    onChange={e => setUserSearch(e.target.value)}
-                    onFocus={() => userResults.length > 0 && setShowUserDrop(true)}
-                    autoComplete="off"
-                  />
-                  {userSearch && (
-                    <button className="ur-search-clear ur-user-search-x" onClick={() => setUserSearch("")}>
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
-
-                {(showUserDrop || searchingUser) && (
-                  <div className="ur-user-dropdown">
-                    {searchingUser ? (
-                      <div className="ur-user-dd-empty">Searching...</div>
-                    ) : userResults.length === 0 ? (
-                      <div className="ur-user-dd-empty">No users found</div>
-                    ) : (
-                      userResults.map(u => (
-                        <div key={u.id} className="ur-user-dd-item" onClick={() => selectUser(u)}>
-                          <div className="ur-user-dd-avatar">{initials(u.name)}</div>
-                          <div>
-                            <p className="ur-user-dd-name">{u.name}</p>
-                            <p className="ur-user-dd-email">{u.email}</p>
-                            <p className="ur-user-dd-id">{u.id}</p>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <hr className="ticket-modal-divider" />
-
-          {/* ── Skill search ── */}
-          <div className="ticket-modal-section">
-            <label className="ticket-modal-label" htmlFor="ur-skill-search">
-              Skill <span style={{ color: "var(--red)" }}>*</span>
-            </label>
-            <div className="ur-user-search-wrap" ref={skillWrapRef}>
-              <div className="ur-user-search-field">
-                <Search size={14} className="ur-user-search-icon" />
-                <input
-                  id="ur-skill-search"
-                  className="ur-input ur-user-search-input"
-                  placeholder={loadingSkills ? "Loading skills..." : "Search skills..."}
-                  disabled={loadingSkills}
-                  value={createForm.skill_name ? createForm.skill_name : skillSearch}
-                  onChange={e => {
-                    setSkillSearch(e.target.value)
-                    setCreateForm(f => ({ ...f, skill_name: "" }))
-                    setShowSkillDrop(true)
-                  }}
-                  onFocus={() => setShowSkillDrop(true)}
-                  autoComplete="off"
-                />
-                {(createForm.skill_name || skillSearch) && (
-                  <button
-                    className="ur-search-clear ur-user-search-x"
-                    onClick={() => {
-                      setCreateForm(f => ({ ...f, skill_name: "" }))
-                      setSkillSearch("")
-                      setShowSkillDrop(false)
-                    }}
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </div>
-
-              {showSkillDrop && !createForm.skill_name && (
-                <div className="ur-user-dropdown">
-                  {filteredSkills.length === 0 ? (
-                    <div className="ur-user-dd-empty">No skills found</div>
-                  ) : (
-                    filteredSkills.map(s => (
-                      <div
-                        key={s.id}
-                        className="ur-skill-dd-item"
-                        onClick={() => {
-                          setCreateForm(f => ({ ...f, skill_name: s.name }))
-                          setSkillSearch("")
-                          setShowSkillDrop(false)
-                        }}
-                      >
-                        <p className="ur-skill-dd-name">{s.name}</p>
-                        <p className="ur-skill-dd-id">ID: {s.skillId}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ── Request type ── */}
-          <div className="ticket-modal-section">
-            <label className="ticket-modal-label" htmlFor="ur-request-type">Request Type</label>
-            <select
-              id="ur-request-type"
-              className="ur-select"
-              value={createForm.request_type}
-              onChange={e => setCreateForm(f => ({ ...f, request_type: e.target.value as RequestType }))}
-            >
-              <option value="skill">Skill</option>
-              <option value="host_eligible_reward_skill">Host-Eligible Reward Skill</option>
-            </select>
-          </div>
-
-          {/* ── Photo upload (UI only) ── */}
-          <div className="ticket-modal-section">
-            <span className="ticket-modal-label">Certification Photo</span>
-            <div
-              className={`ur-upload-zone${photoPreview ? " ur-upload-zone--has-preview" : ""}`}
-              onClick={() => photoInputRef.current?.click()}
-            >
-              {photoPreview ? (
-                <>
-                  <img src={photoPreview} alt="Preview" className="ur-upload-preview" />
-                  <button
-                    className="ur-upload-clear"
-                    onClick={e => { e.stopPropagation(); clearPhoto() }}
-                    title="Remove photo"
-                  >
-                    <X size={13} />
-                  </button>
-                </>
-              ) : (
-                <div className="ur-upload-placeholder">
-                  <Upload size={20} className="ur-upload-icon" />
-                  <p className="ur-upload-label">Click to upload photo</p>
-                  <p className="ur-upload-hint">PNG, JPG, WEBP</p>
-                </div>
-              )}
-            </div>
-            <input
-              ref={photoInputRef}
-              type="file"
-              accept="image/*"
-              style={{ display: "none" }}
-              onChange={handlePhotoChange}
-            />
-            <p className="ur-upload-note">Storage upload coming soon — preview only.</p>
-            <div style={{ marginTop: 10 }}>
-              <label className="ticket-modal-label" htmlFor="ur-cert-url" style={{ display: "block", marginBottom: 6 }}>
-                Or paste photo URL
-              </label>
-              <input
-                id="ur-cert-url"
-                className="ur-input"
-                placeholder="https://..."
-                value={createForm.cert_photo_url}
-                onChange={e => setCreateForm(f => ({ ...f, cert_photo_url: e.target.value }))}
-              />
-            </div>
-          </div>
-
-          <hr className="ticket-modal-divider" />
-
-          {/* ── Approval status ── */}
-          <div className="ticket-modal-section">
-            <span className="ticket-modal-label">Approval Status</span>
-            <div className="ur-status-options">
-              {(["pending", "approved", "rejected"] as const).map(s => {
-                const active =
-                  s === "pending"  ? createForm.isApproved === null :
-                  s === "approved" ? createForm.isApproved === true :
-                                     createForm.isApproved === false
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    className={`ur-status-option ur-status-option--${s}${active ? " ur-status-option--active" : ""}`}
-                    onClick={() => {
-                      const val = s === "pending" ? null : s === "approved" ? true : false
-                      setCreateForm(f => ({
-                        ...f,
-                        isApproved: val,
-                        rejection_reason: s !== "rejected" ? "" : f.rejection_reason,
-                      }))
-                    }}
-                  >
-                    {s.charAt(0).toUpperCase() + s.slice(1)}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          {createForm.isApproved === false && (
-            <div className="ticket-modal-section">
-              <label className="ticket-modal-label" htmlFor="ur-create-rejection">
-                Rejection Reason <span style={{ color: "var(--red)" }}>*</span>
-              </label>
-              <textarea
-                id="ur-create-rejection"
-                className="ur-textarea"
-                placeholder="Explain why this request is being rejected..."
-                rows={3}
-                value={createForm.rejection_reason}
-                onChange={e => setCreateForm(f => ({ ...f, rejection_reason: e.target.value }))}
-              />
-            </div>
-          )}
-
-          <hr className="ticket-modal-divider" />
-
-          <div className="ticket-modal-actions">
-            <button className="ticket-btn-cancel" onClick={resetCreateModal}>
-              Cancel
-            </button>
-            <button
-              className="ticket-btn-confirm"
-              onClick={handleCreate}
-              disabled={
-                !createForm.skill_name.trim() ||
-                !selectedUser ||
-                (createForm.isApproved === false && !createForm.rejection_reason.trim()) ||
-                creating
-              }
-            >
-              {creating ? "Creating..." : "Create Request"}
-            </button>
-          </div>
-        </div>
       </Modal>
 
     </div>
