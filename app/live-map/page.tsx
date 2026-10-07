@@ -16,7 +16,7 @@ import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useTheme } from "@/context/ThemeContext";
 import type { GigMarker, GigType, UserMarker } from "./MapView";
 
-// ─── Dynamic import (Leaflet requires browser APIs — no SSR) ──────────────────
+// ─── Dynamic import (Google Maps requires browser APIs — no SSR) ─────────────
 
 const MapView = dynamic(() => import("./MapView"), {
   ssr: false,

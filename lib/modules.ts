@@ -1,5 +1,6 @@
 export type ModuleKey =
   | "dashboard"
+  | "analytics"
   | "users"
   | "live-gigs"
   | "live-map"
@@ -27,6 +28,7 @@ export interface ModuleMeta {
 
 export const ALL_MODULES: ModuleMeta[] = [
   { key: "dashboard",          label: "Dashboard",               href: "/dashboard" },
+  { key: "analytics",          label: "Analytics",               href: "/analytics" },
   { key: "users",              label: "Users",                   href: "/users" },
   { key: "live-gigs",          label: "Live Gigs",               href: "/live-gigs" },
   { key: "live-map",           label: "Live Map",                href: "/live-map" },

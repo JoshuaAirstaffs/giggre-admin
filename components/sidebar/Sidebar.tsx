@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, Shield,
   Settings, LogOut, ChevronLeft, ChevronRight, Activity,
   Map, MegaphoneIcon, File, BadgeCheck,
-  ClipboardList, Zap, Wrench, Gift, Headphones, Flag,
+  ClipboardList, Zap, Wrench, Gift, Headphones, BarChart3, Flag,
   LucideIcon,
   Filter,
 } from "lucide-react";
@@ -35,6 +35,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Overview",
     items: [
       { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard", module: "dashboard" },
+      { href: "/analytics", icon: BarChart3,       label: "Analytics", module: "analytics" },
     ],
   },
   {

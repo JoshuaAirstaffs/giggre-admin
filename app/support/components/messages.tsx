@@ -42,6 +42,11 @@ interface ChatRoom {
 const ROOMS_PAGE  = 20
 const MSGS_PAGE   = 20
 
+// Gig chats between two users share `chat_rooms` with support chats but carry a
+// `participants` array (support rooms use `userId`) — keep them out of support.
+const isSupportRoom = (d: QueryDocumentSnapshot<DocumentData>) =>
+  !Array.isArray(d.data().participants)
+
 // ── Component ──────────────────────────────────────────────────────────────────
 const Messages = () => {
   // ── Rooms state ─────────────────────────────────────────────────────────────
@@ -108,7 +113,7 @@ const Messages = () => {
 
     const unsub = onSnapshot(q, (snap) => {
       const docs = snap.docs
-      const fetched: ChatRoom[] = docs.map((d) => ({
+      const fetched: ChatRoom[] = docs.filter(isSupportRoom).map((d) => ({
         id: d.id,
         ...(d.data() as Omit<ChatRoom, 'id'>),
       }))
@@ -143,7 +148,7 @@ const Messages = () => {
           limit(ROOMS_PAGE)
         )
       )
-      const fetched: ChatRoom[] = snap.docs.map((d) => ({
+      const fetched: ChatRoom[] = snap.docs.filter(isSupportRoom).map((d) => ({
         id: d.id,
         ...(d.data() as Omit<ChatRoom, 'id'>),
       }))
@@ -159,6 +164,11 @@ const Messages = () => {
       setLoadingMoreRooms(false)
     }
   }, [loadingMoreRooms, hasMoreRooms])
+
+  // ── Top up the sidebar when filtered-out gig chats leave it short ────────────
+  useEffect(() => {
+    if (!loadingRooms && rooms.length < ROOMS_PAGE && hasMoreRooms) loadMoreRooms()
+  }, [loadingRooms, rooms.length, hasMoreRooms, loadMoreRooms])
 
   // ── Sidebar scroll → load more rooms ────────────────────────────────────────
   const onRoomListScroll = () => {

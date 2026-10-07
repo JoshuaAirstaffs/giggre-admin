@@ -20,8 +20,10 @@ import {
   query,
   where,
   serverTimestamp,
+  onSnapshot,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import { signOutWithReason } from "@/lib/sessionLogout";
 import type { ModuleKey } from "@/lib/modules";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -186,6 +188,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => unsubscribe();
   }, []);
+
+  // ── Live access check ──────────────────────────────────────────────────────
+  // The lookup above only runs at sign-in. Watching the admin's own doc means a
+  // super admin deactivating or removing them takes effect immediately, and
+  // role / permission changes apply without a reload.
+  const uid = user?.uid;
+  useEffect(() => {
+    if (!uid) return;
+    return onSnapshot(
+      doc(db, "admins", uid),
+      (snap) => {
+        const data = snap.data();
+        if (!snap.exists() || !data?.isActive || data.isPending === true) {
+          signOutWithReason("revoked");
+          return;
+        }
+        setUser((prev) => {
+          if (!prev) return prev;
+          const role: AdminRole = data.role ?? "admin";
+          const permissions: ModuleKey[] = data.permissions ?? [];
+          const displayName = data.name ?? prev.displayName;
+          const unchanged =
+            prev.role === role &&
+            prev.displayName === displayName &&
+            prev.permissions.length === permissions.length &&
+            prev.permissions.every((p, i) => p === permissions[i]);
+          return unchanged ? prev : { ...prev, role, permissions, displayName };
+        });
+      },
+      // Expected right after sign-out, when the read is no longer allowed
+      (err) => console.warn("[AuthContext] admin doc listener:", err.code ?? err)
+    );
+  }, [uid]);
 
   // ── hasPermission ──────────────────────────────────────────────────────────
   const hasPermission = useCallback(

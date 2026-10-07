@@ -4,6 +4,7 @@ import { ThemeProvider } from "@/context/ThemeContext";
 import { CurrencyProvider } from "@/context/CurrencyContext";
 import { DevModeProvider } from "@/context/DevModeContext";
 import Toaster from "@/components/ui/Toaster";
+import IdleLogout from "@/components/IdleLogout";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -31,7 +32,10 @@ export default function RootLayout({
         <ThemeProvider>
           <CurrencyProvider>
             <DevModeProvider>
-              <AuthProvider>{children}</AuthProvider>
+              <AuthProvider>
+                {children}
+                <IdleLogout />
+              </AuthProvider>
             </DevModeProvider>
           </CurrencyProvider>
           <Toaster />

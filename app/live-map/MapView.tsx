@@ -1,12 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
-import MarkerClusterGroup from "react-leaflet-cluster";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-import "react-leaflet-cluster/dist/assets/MarkerCluster.css";
-import "react-leaflet-cluster/dist/assets/MarkerCluster.Default.css";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { APIProvider, Map, AdvancedMarker, InfoWindow, ColorScheme, useMap } from "@vis.gl/react-google-maps";
+import { MarkerClusterer, SuperClusterAlgorithm, type Cluster } from "@googlemaps/markerclusterer";
 import { Timestamp } from "firebase/firestore";
 import { useCurrency } from "@/context/CurrencyContext";
 import Modal from "@/components/ui/Modal";
@@ -57,66 +53,198 @@ const GIG_LABELS: Record<GigType, string> = {
 };
 
 // Philippines center
-const DEFAULT_CENTER: [number, number] = [12.8797, 121.774];
+const DEFAULT_CENTER = { lat: 12.8797, lng: 121.774 };
 const DEFAULT_ZOOM = 6;
 
-// ─── Icon Factories ───────────────────────────────────────────────────────────
+const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
+// Advanced markers need a map ID. Google's DEMO_MAP_ID works out of the box;
+// set NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID to a real one from Cloud Console later.
+const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID || "DEMO_MAP_ID";
 
-function createGigIcon(gigType: GigType): L.DivIcon {
-  const color = GIG_COLORS[gigType];
-  return L.divIcon({
-    html: `<div style="
-      width:14px;height:14px;border-radius:50%;
-      background:${color};border:2.5px solid rgba(255,255,255,0.9);
-      box-shadow:0 1px 6px rgba(0,0,0,0.5);
-    "></div>`,
-    className: "",
-    iconSize: [14, 14],
-    iconAnchor: [7, 7],
-    popupAnchor: [0, -12],
-  });
+// ─── Marker content ───────────────────────────────────────────────────────────
+
+function GigDot({ gigType }: { gigType: GigType }) {
+  return (
+    <div style={{
+      width: 14, height: 14, borderRadius: "50%",
+      background: GIG_COLORS[gigType], border: "2.5px solid rgba(255,255,255,0.9)",
+      boxShadow: "0 1px 6px rgba(0,0,0,0.5)", cursor: "pointer",
+    }} />
+  );
 }
 
-function createUserIcon(isOnline: boolean, isBanned?: boolean, isSuspended?: boolean): L.DivIcon {
-  const color = isBanned ? "#EF4444" : isSuspended ? "#F59E0B" : isOnline ? "#10B981" : "#64748B";
-  const pulse = isOnline && !isBanned && !isSuspended;
-  return L.divIcon({
-    html: `<div style="position:relative;width:20px;height:20px;">
-      ${pulse ? `<div style="
-        position:absolute;inset:-4px;border-radius:50%;
-        background:${color};opacity:0.25;
-        animation:user-pulse 1.8s ease-in-out infinite;
-      "></div>` : ""}
-      <div style="
-        position:relative;width:20px;height:20px;border-radius:50%;
-        background:${color};border:2.5px solid rgba(255,255,255,0.9);
-        box-shadow:0 1px 8px rgba(0,0,0,0.5);
-        display:flex;align-items:center;justify-content:center;
-      ">
+function userColor(u: UserMarker) {
+  return u.isBanned ? "#EF4444" : u.isSuspended ? "#F59E0B" : u.isOnline ? "#10B981" : "#64748B";
+}
+
+function UserDot({ user }: { user: UserMarker }) {
+  const color = userColor(user);
+  const pulse = user.isOnline && !user.isBanned && !user.isSuspended;
+  return (
+    <div style={{ position: "relative", width: 20, height: 20, cursor: "pointer" }}>
+      {pulse && (
+        <div style={{
+          position: "absolute", inset: -4, borderRadius: "50%",
+          background: color, opacity: 0.25, animation: "user-pulse 1.8s ease-in-out infinite",
+        }} />
+      )}
+      <div style={{
+        position: "relative", width: 20, height: 20, borderRadius: "50%",
+        background: color, border: "2.5px solid rgba(255,255,255,0.9)",
+        boxShadow: "0 1px 8px rgba(0,0,0,0.5)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
           <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/>
         </svg>
       </div>
-    </div>`,
-    className: "",
-    iconSize: [20, 20],
-    iconAnchor: [10, 10],
-    popupAnchor: [0, -14],
-  });
+    </div>
+  );
 }
 
+function clusterBubble(count: number, ring: string, theme: MapTheme): HTMLElement {
+  const size = count < 10 ? 34 : count < 100 ? 40 : 46;
+  const isDark = theme === "dark";
+  const el = document.createElement("div");
+  el.style.cssText = `
+    width:${size}px;height:${size}px;border-radius:50%;cursor:pointer;
+    background:${isDark ? "#111827" : "#ffffff"};border:2px solid ${ring};
+    display:flex;align-items:center;justify-content:center;
+    color:${isDark ? "#F1F5F9" : "#1e293b"};font-family:'Space Mono',monospace;
+    font-size:11px;font-weight:700;
+    box-shadow:0 2px 8px rgba(0,0,0,${isDark ? "0.5" : "0.2"});
+  `;
+  el.textContent = String(count);
+  return el;
+}
+
+// ─── Clustered markers ────────────────────────────────────────────────────────
+// Each item is a React-rendered AdvancedMarker; the clusterer only groups the
+// underlying marker elements, so markers keep their own click handling.
+
+type MarkerEl = google.maps.marker.AdvancedMarkerElement;
+
+function ClusteredMarkers<T extends { id: string; lat: number; lng: number }>({
+  items,
+  theme,
+  ringColor,
+  radius,
+  renderContent,
+  onItemClick,
+  onClusterClick,
+}: {
+  items: T[];
+  theme: MapTheme;
+  ringColor: string;
+  radius: number;
+  renderContent: (item: T) => React.ReactNode;
+  onItemClick: (item: T) => void;
+  /** Return true to take over the click; otherwise the map zooms into the cluster. */
+  onClusterClick?: (position: google.maps.LatLngLiteral, items: T[]) => boolean;
+}) {
+  const map = useMap();
+  const [markers, setMarkers] = useState<Record<string, MarkerEl>>({});
+
+  // Latest props for the clusterer's callbacks, which are created once per map/theme
+  const itemsById = useRef(new globalThis.Map<string, T>());
+  itemsById.current = new globalThis.Map(items.map((i) => [i.id, i]));
+  const idByMarker = useRef(new globalThis.Map<MarkerEl, string>());
+  const clusterClickRef = useRef(onClusterClick);
+  clusterClickRef.current = onClusterClick;
+
+  const clusterer = useMemo(() => {
+    if (!map) return null;
+    return new MarkerClusterer({
+      map,
+      algorithm: new SuperClusterAlgorithm({ radius, maxZoom: 18 }),
+      renderer: {
+        render: ({ count, position }) =>
+          new google.maps.marker.AdvancedMarkerElement({
+            position,
+            content: clusterBubble(count, ringColor, theme),
+            zIndex: 1000 + count,
+          }),
+      },
+      onClusterClick: (_event, cluster: Cluster, m) => {
+        const clustered = cluster.markers
+          .map((mk) => itemsById.current.get(idByMarker.current.get(mk as MarkerEl) ?? ""))
+          .filter((x): x is T => x != null);
+        const pos = cluster.position.toJSON();
+        if (clusterClickRef.current?.(pos, clustered)) return;
+        if (cluster.bounds) m.fitBounds(cluster.bounds, 48);
+      },
+    });
+  }, [map, theme, ringColor, radius]);
+
+  useEffect(() => () => {
+    clusterer?.clearMarkers();
+    clusterer?.setMap(null);
+  }, [clusterer]);
+
+  useEffect(() => {
+    if (!clusterer) return;
+    clusterer.clearMarkers();
+    clusterer.addMarkers(Object.values(markers));
+  }, [clusterer, markers]);
+
+  // One stable ref callback per item — an inline arrow would be a new function
+  // every render, making React detach/re-attach every marker and loop forever.
+  const refCallbacks = useRef(new globalThis.Map<string, (m: MarkerEl | null) => void>());
+  const refFor = (id: string) => {
+    let cb = refCallbacks.current.get(id);
+    if (!cb) {
+      cb = (m: MarkerEl | null) => setMarkerRef(m, id);
+      refCallbacks.current.set(id, cb);
+    }
+    return cb;
+  };
+
+  const setMarkerRef = useCallback((marker: MarkerEl | null, id: string) => {
+    setMarkers((prev) => {
+      if ((marker && prev[id] === marker) || (!marker && !prev[id])) return prev;
+      if (marker) {
+        idByMarker.current.set(marker, id);
+        return { ...prev, [id]: marker };
+      }
+      const next = { ...prev };
+      if (next[id]) idByMarker.current.delete(next[id]);
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  return (
+    <>
+      {items.map((item) => (
+        <AdvancedMarker
+          key={item.id}
+          position={{ lat: item.lat, lng: item.lng }}
+          ref={refFor(item.id)}
+          onClick={() => onItemClick(item)}
+        >
+          {renderContent(item)}
+        </AdvancedMarker>
+      ))}
+    </>
+  );
+}
 
 // ─── Fit Bounds Helper ────────────────────────────────────────────────────────
 
+/** Fits the view once, when the first markers arrive. */
 function FitBounds({ points }: { points: { lat: number; lng: number }[] }) {
   const map = useMap();
+  const fitted = useRef(false);
   useEffect(() => {
-    if (points.length === 0) return;
-    const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng]));
-    map.fitBounds(bounds, { padding: [48, 48], maxZoom: 13 });
-  // Only fit on initial load
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [points.length > 0 ? "has-points" : "no-points"]);
+    if (!map || fitted.current || points.length === 0) return;
+    fitted.current = true;
+    const bounds = new google.maps.LatLngBounds();
+    points.forEach((p) => bounds.extend(p));
+    map.fitBounds(bounds, 48);
+    google.maps.event.addListenerOnce(map, "idle", () => {
+      if ((map.getZoom() ?? 0) > 13) map.setZoom(13);
+    });
+  }, [map, points]);
   return null;
 }
 
@@ -230,16 +358,6 @@ function UserPopup({ user, theme }: { user: UserMarker; theme: MapTheme }) {
 // ─── Map View ─────────────────────────────────────────────────────────────────
 
 export type MapTheme = "dark" | "light";
-
-const TILE_URLS: Record<MapTheme, string> = {
-  dark:  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-  light: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-};
-
-const MAP_BG: Record<MapTheme, string> = {
-  dark:  "#0A0F1E",
-  light: "#e8e8e8",
-};
 
 const POPUP_THEME = {
   dark: {
@@ -468,29 +586,10 @@ function CopyableIdField({ label, value }: { label: string; value: string }) {
   );
 }
 
-function createClusterIconThemed(cluster: any, theme: MapTheme): L.DivIcon { // eslint-disable-line @typescript-eslint/no-explicit-any
-  const count = cluster.getChildCount();
-  const size = count < 10 ? 34 : count < 100 ? 40 : 46;
-  const isDark = theme === "dark";
-  return L.divIcon({
-    html: `<div style="
-      width:${size}px;height:${size}px;border-radius:50%;
-      background:${isDark ? "#111827" : "#ffffff"};border:2px solid #3B82F6;
-      display:flex;align-items:center;justify-content:center;
-      color:${isDark ? "#F1F5F9" : "#1e293b"};font-family:'Space Mono',monospace;
-      font-size:11px;font-weight:700;
-      box-shadow:0 2px 8px rgba(0,0,0,${isDark ? "0.5" : "0.2"});
-    ">${count}</div>`,
-    className: "",
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-  });
-}
-
-interface ClusterPopupState {
-  position: [number, number];
-  gigs: GigMarker[];
-}
+type Selected =
+  | { kind: "gig"; gig: GigMarker }
+  | { kind: "user"; user: UserMarker }
+  | { kind: "cluster"; position: google.maps.LatLngLiteral; gigs: GigMarker[] };
 
 export default function MapView({
   markers,
@@ -505,176 +604,109 @@ export default function MapView({
   showUsers?: boolean;
   theme?: MapTheme;
 }) {
-  const memoMarkers = useMemo(() => markers, [markers]);
-  const memoUsers = useMemo(() => userMarkers, [userMarkers]);
   const pt = POPUP_THEME[theme];
-  const [clusterPopup, setClusterPopup] = useState<ClusterPopupState | null>(null);
+  const [selected, setSelected] = useState<Selected | null>(null);
   const [selectedGig, setSelectedGig] = useState<GigMarker | null>(null);
 
-  useEffect(() => { setClusterPopup(null); }, [theme]);
+  useEffect(() => { setSelected(null); }, [theme, showGigs, showUsers]);
 
-  const allMarkersForBounds = useMemo(() => {
-    const gigPoints = memoMarkers.map((m) => ({ lat: m.lat, lng: m.lng }));
-    const userPoints = memoUsers.map((u) => ({ lat: u.lat, lng: u.lng }));
-    return [...gigPoints, ...userPoints];
-  }, [memoMarkers, memoUsers]);
+  const allMarkersForBounds = useMemo(() => [
+    ...markers.map((m) => ({ lat: m.lat, lng: m.lng })),
+    ...userMarkers.map((u) => ({ lat: u.lat, lng: u.lng })),
+  ], [markers, userMarkers]);
 
-  function handleClusterClick(e: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-    const childMarkers: (L.Marker & { __gigId?: string })[] = e.layer.getAllChildMarkers();
-    const latlng: L.LatLng = e.layer.getLatLng();
-    const clusterGigs = childMarkers
-      .map((m) => memoMarkers.find((g) => g.id === m.__gigId))
-      .filter(Boolean) as GigMarker[];
-    setClusterPopup({ position: [latlng.lat, latlng.lng], gigs: clusterGigs });
+  if (!API_KEY) {
+    return (
+      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
+        Google Maps API key missing — set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY in .env.local and restart the dev server.
+      </div>
+    );
   }
+
+  const position =
+    selected?.kind === "gig" ? { lat: selected.gig.lat, lng: selected.gig.lng }
+    : selected?.kind === "user" ? { lat: selected.user.lat, lng: selected.user.lng }
+    : selected?.position;
 
   return (
     <>
       <style>{`
-        .leaflet-popup-content-wrapper {
+        .gm-style .gm-style-iw-c {
           background: ${pt.bg} !important;
-          border: 1px solid ${pt.border} !important;
+          border: 1px solid ${pt.border};
           border-radius: 10px !important;
           box-shadow: 0 4px 20px rgba(0,0,0,0.25) !important;
-          color: ${pt.title} !important;
           padding: 0 !important;
         }
-        .leaflet-popup-content {
-          margin: 12px 14px !important;
-        }
-        .leaflet-popup-tip {
-          background: ${pt.bg} !important;
-        }
-        .leaflet-popup-close-button {
-          color: ${pt.close} !important;
-          font-size: 16px !important;
-        }
-        .leaflet-popup-close-button:hover {
-          color: ${pt.closeHover} !important;
-        }
-        .marker-cluster-small,
-        .marker-cluster-medium,
-        .marker-cluster-large {
-          background: transparent !important;
-        }
-        .marker-cluster-small div,
-        .marker-cluster-medium div,
-        .marker-cluster-large div {
-          background: transparent !important;
-        }
-        .leaflet-container {
-          font-family: 'DM Sans', sans-serif;
-        }
-        .leaflet-tile {
-          margin-right: -1px;
-          margin-bottom: -1px;
-        }
+        .gm-style .gm-style-iw-d { overflow: auto !important; padding: 0 14px 12px; }
+        .gm-style .gm-style-iw-chr { height: 28px; }
+        .gm-style .gm-style-iw-tc::after { background: ${pt.bg} !important; }
+        .gm-style .gm-ui-hover-effect > span { background-color: ${pt.close} !important; }
+        .gm-style .gm-ui-hover-effect:hover > span { background-color: ${pt.closeHover} !important; }
         @keyframes user-pulse {
           0%, 100% { transform: scale(1); opacity: 0.25; }
           50% { transform: scale(1.6); opacity: 0; }
         }
       `}</style>
-      <MapContainer
-        center={DEFAULT_CENTER}
-        zoom={DEFAULT_ZOOM}
-        style={{ height: "100%", width: "100%", background: MAP_BG[theme] }}
-        zoomControl={true}
-      >
-        <TileLayer
-          url={TILE_URLS[theme]}
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-          subdomains="abcd"
-          maxZoom={20}
-          tileSize={512}
-          zoomOffset={-1}
-          detectRetina
-        />
-
-        {allMarkersForBounds.length > 0 && (
+      <APIProvider apiKey={API_KEY}>
+        <Map
+          // colorScheme is only read on init — remount when the theme flips
+          key={theme}
+          mapId={MAP_ID}
+          defaultCenter={DEFAULT_CENTER}
+          defaultZoom={DEFAULT_ZOOM}
+          colorScheme={theme === "dark" ? ColorScheme.DARK : ColorScheme.LIGHT}
+          gestureHandling="greedy"
+          disableDefaultUI
+          zoomControl
+          clickableIcons={false}
+          onClick={() => setSelected(null)}
+          style={{ height: "100%", width: "100%" }}
+        >
           <FitBounds points={allMarkersForBounds} />
-        )}
 
-        {/* Gig markers cluster */}
-        {showGigs && (
-          <MarkerClusterGroup
-            key={`gigs-${theme}`}
-            chunkedLoading
-            iconCreateFunction={(cluster: any) => createClusterIconThemed(cluster, theme)} // eslint-disable-line @typescript-eslint/no-explicit-any
-            maxClusterRadius={50}
-            zoomToBoundsOnClick={false}
-            spiderfyOnMaxZoom={false}
-            showCoverageOnHover={false}
-            eventHandlers={{ clusterclick: handleClusterClick }}
-          >
-            {memoMarkers.map((gig) => (
-              <Marker
-                key={gig.id}
-                position={[gig.lat, gig.lng]}
-                icon={createGigIcon(gig.gigType)}
-                ref={(instance) => {
-                  if (instance) (instance as L.Marker & { __gigId?: string }).__gigId = gig.id;
-                }}
-              >
-                <Popup>
-                  <GigPopup gig={gig} theme={theme} />
-                </Popup>
-              </Marker>
-            ))}
-          </MarkerClusterGroup>
-        )}
+          {showGigs && (
+            <ClusteredMarkers
+              items={markers}
+              theme={theme}
+              ringColor="#3B82F6"
+              radius={60}
+              renderContent={(gig) => <GigDot gigType={gig.gigType} />}
+              onItemClick={(gig) => setSelected({ kind: "gig", gig })}
+              onClusterClick={(pos, gigs) => {
+                setSelected({ kind: "cluster", position: pos, gigs });
+                return true;
+              }}
+            />
+          )}
 
-        {/* User markers cluster */}
-        {showUsers && (
-          <MarkerClusterGroup
-            key={`users-${theme}`}
-            chunkedLoading
-            iconCreateFunction={(cluster: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
-              const count = cluster.getChildCount();
-              const size = count < 10 ? 34 : count < 100 ? 40 : 46;
-              const isDark = theme === "dark";
-              return L.divIcon({
-                html: `<div style="
-                  width:${size}px;height:${size}px;border-radius:50%;
-                  background:${isDark ? "#111827" : "#ffffff"};border:2px solid #10B981;
-                  display:flex;align-items:center;justify-content:center;
-                  color:${isDark ? "#F1F5F9" : "#1e293b"};font-family:'Space Mono',monospace;
-                  font-size:11px;font-weight:700;
-                  box-shadow:0 2px 8px rgba(0,0,0,${isDark ? "0.5" : "0.2"});
-                ">${count}</div>`,
-                className: "",
-                iconSize: [size, size],
-                iconAnchor: [size / 2, size / 2],
-              });
-            }}
-            maxClusterRadius={40}
-            zoomToBoundsOnClick={true}
-            spiderfyOnMaxZoom={true}
-            showCoverageOnHover={false}
-          >
-            {memoUsers.map((user) => (
-              <Marker
-                key={user.id}
-                position={[user.lat, user.lng]}
-                icon={createUserIcon(user.isOnline, user.isBanned, user.isSuspended)}
-              >
-                <Popup>
-                  <UserPopup user={user} theme={theme} />
-                </Popup>
-              </Marker>
-            ))}
-          </MarkerClusterGroup>
-        )}
+          {showUsers && (
+            <ClusteredMarkers
+              items={userMarkers}
+              theme={theme}
+              ringColor="#10B981"
+              radius={50}
+              renderContent={(user) => <UserDot user={user} />}
+              onItemClick={(user) => setSelected({ kind: "user", user })}
+            />
+          )}
 
-        {clusterPopup && (
-          <Popup
-            position={clusterPopup.position}
-            eventHandlers={{ remove: () => setClusterPopup(null) }}
-            maxWidth={320}
-          >
-            <GigListPopup gigs={clusterPopup.gigs} theme={theme} onSelect={setSelectedGig} />
-          </Popup>
-        )}
-      </MapContainer>
+          {selected && position && (
+            <InfoWindow
+              position={position}
+              pixelOffset={[0, selected.kind === "cluster" ? -18 : -12]}
+              maxWidth={320}
+              onCloseClick={() => setSelected(null)}
+            >
+              {selected.kind === "gig" && <GigPopup gig={selected.gig} theme={theme} />}
+              {selected.kind === "user" && <UserPopup user={selected.user} theme={theme} />}
+              {selected.kind === "cluster" && (
+                <GigListPopup gigs={selected.gigs} theme={theme} onSelect={setSelectedGig} />
+              )}
+            </InfoWindow>
+          )}
+        </Map>
+      </APIProvider>
 
       {selectedGig && (
         <GigDetailModal gig={selectedGig} onClose={() => setSelectedGig(null)} />
