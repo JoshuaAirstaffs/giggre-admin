@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect} from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/context/AuthContext";
@@ -22,11 +22,13 @@ import {
   type SectionData,
 } from "@/hooks/useContent";
 import { AboutGiggrePanel } from "@/components/ui/content/AboutGiggrePanel";
+import { ImageUploadField } from "@/components/ui/content/ImageUploadField";
+import { deleteOwnedImage } from "@/lib/storageCleanup";
 import type { ContentSectionKey } from "@/lib/activitylog";
 import {
-  Plus, Edit2, Trash2, Settings, Tag,
+  Plus, Edit2, Trash2, Settings, Tag, Shuffle,
   Image, HelpCircle, Shield, ScrollText, Info, RefreshCw,
-  X, Upload, AlertCircle, Check, ChevronLeft, ChevronRight,
+  X, AlertCircle, Check, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import type { SectionState } from "@/hooks/usePerSectionData";
 
@@ -261,6 +263,12 @@ function Pagination({
 
 // ─── Item Form ────────────────────────────────────────────────────────────────
 
+/** Carousel items carry an uploaded `picture`; other sections don't. */
+function pictureOf(item: Partial<ContentItem>): string | undefined {
+  const picture = (item as { picture?: unknown }).picture;
+  return typeof picture === "string" ? picture : undefined;
+}
+
 function ItemForm({
   sectionKey,
   initial,
@@ -285,15 +293,41 @@ function ItemForm({
 
   const set = (key: string, value: any) =>
     setForm((prev: any) => ({ ...prev, [key]: value }));
+  const [uploading, setUploading] = useState(false);
+
+  // Images uploaded while this form was open. When it closes, any that weren't
+  // the one saved (replaced, removed, or the form was cancelled) are deleted.
+  const uploadedRef = useRef<string[]>([]);
+  const savedPictureRef = useRef<string | null>(null);
+  useEffect(() => () => {
+    uploadedRef.current
+      .filter((url) => url !== savedPictureRef.current)
+      .forEach((url) => deleteOwnedImage(url));
+  }, []);
 
   const currentSortTaken =
     sectionKey === "carousel_items" &&
     form.sortNumber > 0 &&
     takenSortNumbers.filter(n => n !== (isEdit ? initial.sortNumber : null)).includes(form.sortNumber);
 
+  // A carousel slide without an image can be saved, but only as hidden (sort 0)
+  const carouselNoImage = sectionKey === "carousel_items" && !form.picture?.trim();
+  const lastSortRef = useRef<number>(0);
+  const setPicture = (url: string) =>
+    setForm((prev: any) => {
+      if (sectionKey !== "carousel_items") return { ...prev, picture: url };
+      if (!url.trim()) {
+        if (prev.sortNumber > 0) lastSortRef.current = prev.sortNumber;
+        return { ...prev, picture: url, sortNumber: 0 };
+      }
+      // Image back: restore the slide's previous position if it had one
+      const restore = !prev.picture?.trim() && prev.sortNumber === 0 && lastSortRef.current > 0;
+      return { ...prev, picture: url, ...(restore ? { sortNumber: lastSortRef.current } : {}) };
+    });
+
   const canSubmit =
     sectionKey === "carousel_items"
-      ? !!form.picture?.trim() && !!form.imageName?.trim() && !currentSortTaken
+      ? !!form.imageName?.trim() && !currentSortTaken
       : !!form.title?.trim();
 
   return (
@@ -305,8 +339,6 @@ function ItemForm({
         .if-textarea { resize: vertical; min-height: 100px; line-height: 1.6; }
         .if-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .if-sort-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
-        .if-upload { width: 100%; height: 90px; background: var(--bg-elevated); border: 2px dashed var(--border); border-radius: var(--radius-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--text-muted); font-size: 12px; cursor: pointer; transition: border-color 0.2s; }
-        .if-upload:hover { border-color: var(--blue); color: var(--blue); }
         .if-select { width: 100%; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 12px; color: var(--text-primary); font-size: 13px; outline: none; font-family: inherit; transition: border-color 0.2s; }
         .if-select:focus { border-color: var(--blue); }
       `}</style>
@@ -314,11 +346,22 @@ function ItemForm({
       {sectionKey === "carousel_items" && (
         <>
           <div>
-            <label className="if-label">Image URL *</label>
-            <div className="if-upload" onClick={() => toast.info("Image upload", "Storage integration coming soon")}>
-              <Upload size={16} /><span>Click to upload or paste URL below</span>
-            </div>
-            <input className="if-input" style={{ marginTop: 8 }} placeholder="Paste image URL (Firebase Storage or external)…" value={form.picture ?? ""} onChange={(e) => set("picture", e.target.value)} disabled={loading} />
+            <label className="if-label">Image</label>
+            <ImageUploadField
+              value={form.picture ?? ""}
+              onChange={setPicture}
+              folder="app_content/carousel"
+              disabled={loading}
+              onUploadingChange={setUploading}
+              onUploaded={(url) => uploadedRef.current.push(url)}
+              onFileChosen={(name) => setForm((prev: any) => (prev.imageName?.trim() ? prev : { ...prev, imageName: name }))}
+            />
+            <input className="if-input" style={{ marginTop: 8 }} placeholder="…or paste an image URL" value={form.picture ?? ""} onChange={(e) => setPicture(e.target.value)} disabled={loading || uploading} />
+            {carouselNoImage && (
+              <div className="if-sort-hint" style={{ color: "var(--amber)" }}>
+                No image — this slide will be saved as hidden (sort 0). Add an image to publish it.
+              </div>
+            )}
           </div>
           <div>
             <label className="if-label">Image Name *</label>
@@ -372,7 +415,8 @@ function ItemForm({
             min={0}
             value={form.sortNumber ?? 0}
             onChange={(e) => set("sortNumber", parseInt(e.target.value) || 0)}
-            disabled={loading}
+            disabled={loading || carouselNoImage}
+            title={carouselNoImage ? "Add an image to publish this slide" : undefined}
             style={{
               borderColor: currentSortTaken ? "var(--red)" : undefined,
             }}
@@ -393,7 +437,10 @@ function ItemForm({
         )}
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 4 }}>
-        <Button variant="primary" size="sm" loading={loading} onClick={() => onSubmit(form)} disabled={!canSubmit || loading}>
+        <Button variant="primary" size="sm" loading={loading} onClick={() => {
+          savedPictureRef.current = form.picture ?? null;
+          onSubmit(carouselNoImage ? { ...form, sortNumber: 0 } : form);
+        }} disabled={!canSubmit || loading || uploading}>
           {isEdit ? "Save Changes" : "Create Item"}
         </Button>
       </div>
@@ -630,11 +677,12 @@ function SectionPanel({
   content: ReturnType<typeof useContent>;
 }) {
   const meta = getSectionMeta(sectionKey);
-  const { submitting, createItem, updateItem, deleteItem, saveSettings, saveCategories } = content;
+  const { submitting, createItem, updateItem, deleteItem, shuffleItems, saveSettings, saveCategories } = content;
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ContentItem | null>(null);
   const [deleting, setDeleting] = useState<ContentItem | null>(null);
+  const [shuffling, setShuffling] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [catMgrOpen, setCatMgrOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -713,6 +761,9 @@ function SectionPanel({
 
     const result = await updateItem(sectionKey, meta.label, editing, form);
     if (result.success) {
+      // The replaced / removed image is no longer referenced anywhere
+      const oldPicture = pictureOf(editing);
+      if (oldPicture && oldPicture !== pictureOf(form)) deleteOwnedImage(oldPicture);
       toast.success("Item updated");
       setEditing(null);
       onRefresh();
@@ -725,6 +776,7 @@ function SectionPanel({
     if (!deleting) return;
     const result = await deleteItem(sectionKey, meta.label, deleting);
     if (result.success) {
+      deleteOwnedImage(pictureOf(deleting));
       toast.success("Item deleted");
       setDeleting(null);
       // If last item on current page was deleted, go back one page
@@ -734,6 +786,17 @@ function SectionPanel({
       onRefresh();
     } else {
       toast.error("Failed to delete item", result.error);
+    }
+  };
+
+  const handleShuffle = async () => {
+    const result = await shuffleItems(sectionKey, meta.label, sectionState.data?.items ?? []);
+    if (result.success) {
+      toast.success("Order shuffled", `${takenSortNumbers.length} published slides reordered`);
+      setShuffling(false);
+      onRefresh();
+    } else {
+      toast.error("Couldn't shuffle", result.error);
     }
   };
 
@@ -852,6 +915,18 @@ function SectionPanel({
             <Settings size={13} />
           </button>
         )}
+        {sectionKey === "carousel_items" && (
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={Shuffle}
+            onClick={() => setShuffling(true)}
+            disabled={submitting || takenSortNumbers.length < 2}
+            title={takenSortNumbers.length < 2 ? "Needs at least 2 published slides" : "Randomly reorder the published slides"}
+          >
+            Shuffle order
+          </Button>
+        )}
         <Button variant="primary" size="sm" icon={Plus} onClick={() => setCreating(true)}>
           Add Item
         </Button>
@@ -937,6 +1012,16 @@ function SectionPanel({
           <ItemForm sectionKey={sectionKey} initial={editing} onSubmit={handleEdit} loading={submitting} isEdit takenSortNumbers={takenSortNumbers} availableCategories={availableCategories} />
         )}
       </Modal>
+
+      <ConfirmDialog
+        open={shuffling}
+        onClose={() => setShuffling(false)}
+        onConfirm={handleShuffle}
+        title="Shuffle carousel order?"
+        message={`The ${takenSortNumbers.length} published slides will be put in a new random order, using the same sort numbers. Hidden slides (sort 0) stay hidden. The app shows the new order right away.`}
+        confirmLabel="Shuffle"
+        loading={submitting}
+      />
 
       <ConfirmDialog
         open={!!deleting}

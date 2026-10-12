@@ -11,6 +11,7 @@ import {
   deleteDoc,
   getDoc,
   serverTimestamp,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { writeLog, buildDescription } from "@/lib/activitylog";
@@ -403,6 +404,69 @@ export function useContent(actor: ActorInfo) {
     [log],
   );
 
+  // ── shuffleItems ─────────────────────────────────────────────────────────
+  // Randomly reorders the PUBLISHED items (sortNumber > 0) by handing their
+  // existing sort numbers out in a new random order. Hidden items (0) stay
+  // hidden, and the set of numbers in use doesn't change. One batch, one log.
+  const shuffleItems = useCallback(
+    async (
+      sectionKey:   ContentSectionKey,
+      sectionLabel: string,
+      items:        ContentItem[],
+    ): Promise<{ success: boolean; error?: string }> => {
+      const published = items
+        .filter((i) => (i.sortNumber ?? 0) > 0)
+        .sort((a, b) => a.sortNumber - b.sortNumber);
+      if (published.length < 2) {
+        return { success: false, error: "At least 2 published items are needed to shuffle." };
+      }
+
+      // Fisher–Yates; retry a few times so the result actually differs
+      const slots = published.map((i) => i.sortNumber);
+      let order = published;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        order = [...published];
+        for (let i = order.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [order[i], order[j]] = [order[j], order[i]];
+        }
+        if (order.some((item, i) => item.id !== published[i].id)) break;
+      }
+
+      setSubmitting(true);
+      try {
+        const batch = writeBatch(db);
+        const from: Record<string, number> = {};
+        const to: Record<string, number> = {};
+        order.forEach((item, i) => {
+          from[item.id] = item.sortNumber;
+          to[item.id] = slots[i];
+          batch.update(doc(db, "app_content", sectionKey, "items", item.id), {
+            sortNumber: slots[i],
+            dateUpdated: serverTimestamp(),
+          });
+        });
+        batch.update(doc(db, "app_content", sectionKey), { lastUpdated: serverTimestamp() });
+        await batch.commit();
+
+        await log({
+          module:      "content_management",
+          action:      "content_reordered",
+          description: `${buildDescription.contentReordered(sectionLabel)} (shuffled ${order.length} published items)`,
+          targetSection: sectionKey,
+          affectedFiles: [...order.map((i) => itemPath(sectionKey, i.id)), sectionPath(sectionKey)],
+          meta: { from, to },
+        });
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message ?? "Failed to shuffle items." };
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [log],
+  );
+
   // ── deleteItem ───────────────────────────────────────────────────────────
   const deleteItem = useCallback(
     async (
@@ -566,6 +630,7 @@ export function useContent(actor: ActorInfo) {
     createItem,
     updateItem,
     deleteItem,
+    shuffleItems,
     saveSettings,
     saveCategories,
   };
