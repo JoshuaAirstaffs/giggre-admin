@@ -23,7 +23,11 @@ export default function SidebarItem({
   const isActive = pathname === href || pathname.startsWith(href + "/");
 
   return (
-    <Link href={href} className="sidebar-item-link" title={collapsed ? label : undefined}>
+    <Link
+      href={href}
+      className="sidebar-item-link"
+      title={collapsed ? (badge ? `${label} (${badge})` : label) : undefined}
+    >
       <style>{`
         .sidebar-item-link {
           display: flex;
@@ -75,6 +79,16 @@ export default function SidebarItem({
           flex-shrink: 0;
           transition: opacity 0.2s;
         }
+        .s-dot {
+          position: absolute;
+          top: 6px;
+          left: 26px;
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: var(--blue);
+          border: 2px solid var(--bg-surface);
+        }
         .s-active-bar {
           position: absolute;
           left: 0;
@@ -87,6 +101,7 @@ export default function SidebarItem({
       `}</style>
       {isActive && <span className="s-active-bar" />}
       <Icon className="s-icon" size={18} />
+      {collapsed && badge !== undefined && badge > 0 && <span className="s-dot" />}
       {!collapsed && (
         <>
           <span className="s-label">{label}</span>

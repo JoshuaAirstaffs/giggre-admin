@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 
 import { useCurrency } from "@/context/CurrencyContext";
+import { readApiJson } from "@/lib/apiResponse";
 
 // ─── Gig types (for user gigs panel) ──────────────────────────────────────────
 
@@ -1201,7 +1202,7 @@ function UsersPageInner() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(createForm),
       });
-      const data = await res.json();
+      const data = await readApiJson(res);
       if (!res.ok) {
         setCreateError(data.error ?? "Failed to create user.");
         return;

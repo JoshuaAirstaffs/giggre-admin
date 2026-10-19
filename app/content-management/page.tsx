@@ -294,6 +294,7 @@ function ItemForm({
   const set = (key: string, value: any) =>
     setForm((prev: any) => ({ ...prev, [key]: value }));
   const [uploading, setUploading] = useState(false);
+  const [imageValid, setImageValid] = useState(true);
 
   // Images uploaded while this form was open. When it closes, any that weren't
   // the one saved (replaced, removed, or the form was cancelled) are deleted.
@@ -327,7 +328,7 @@ function ItemForm({
 
   const canSubmit =
     sectionKey === "carousel_items"
-      ? !!form.imageName?.trim() && !currentSortTaken
+      ? !!form.imageName?.trim() && !currentSortTaken && imageValid
       : !!form.title?.trim();
 
   return (
@@ -353,6 +354,7 @@ function ItemForm({
               folder="app_content/carousel"
               disabled={loading}
               onUploadingChange={setUploading}
+              onValidityChange={setImageValid}
               onUploaded={(url) => uploadedRef.current.push(url)}
               onFileChosen={(name) => setForm((prev: any) => (prev.imageName?.trim() ? prev : { ...prev, imageName: name }))}
             />

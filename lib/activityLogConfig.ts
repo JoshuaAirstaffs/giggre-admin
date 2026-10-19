@@ -50,6 +50,11 @@ export const MODULE_CONFIG: Record<string, ModuleConfig> = {
     variant: "gray",
     accentColor: "var(--text-muted)",
   },
+  referrals: {
+    label: "Referrals",
+    variant: "green",
+    accentColor: "var(--green)",
+  },
   announcements: {
     label: "Announcements",
     variant: "pink",
@@ -121,6 +126,9 @@ export const ACTION_CONFIG: Record<string, ActionConfig> = {
 
   // ── settings  (module variant: gray) ─────────────────────────────────────
   settings_updated: { label: "Settings Updated", variant: "gray" },
+
+  // ── referrals  (module variant: green) ───────────────────────────────────
+  referral_settings_updated: { label: "Referral Settings Updated", variant: "green" },
 
   // ── user_requests  (module variant: teal) ────────────────────────────────
   user_request_approved: { label: "Request Approved", variant: "green" },

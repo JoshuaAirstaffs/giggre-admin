@@ -65,6 +65,8 @@ export type SkillLogAction =
 
 export type SettingsLogAction = "settings_updated";
 
+export type ReferralLogAction = "referral_settings_updated";
+
 export type UserRequestLogAction =
   | "user_request_approved"
   | "user_request_rejected"
@@ -92,6 +94,7 @@ export type LogAction =
   | WordFilterLogAction
   | SkillLogAction
   | SettingsLogAction
+  | ReferralLogAction
   | UserRequestLogAction
   | VerificationLogAction
   | SupportLogAction;
@@ -103,6 +106,7 @@ export type LogModule =
   | "gig_management"
   | "reports"
   | "settings"
+  | "referrals"
   | "announcements"
   | "library"
   | "quick_gig_config"

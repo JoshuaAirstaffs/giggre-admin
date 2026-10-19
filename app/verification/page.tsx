@@ -1293,7 +1293,7 @@ function VerificationPageInner() {
           box-shadow: 0 1px 3px rgba(0,0,0,0.15);
         }
         .vr-badge-count {
-          background: var(--red); color: white;
+          background: var(--blue); color: white;
           font-size: 10px; font-weight: 700; border-radius: 999px;
           padding: 1px 5px; line-height: 1.4;
         }

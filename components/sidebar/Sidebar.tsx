@@ -14,6 +14,7 @@ import { auth } from "@/lib/firebase";
 import type { AdminUser } from "@/context/AuthContext";
 import { useAuth } from "@/context/AuthContext";
 import SidebarItem from "./SidebarItem";
+import { usePendingVerifications } from "@/hooks/usePendingVerifications";
 import type { ModuleKey } from "@/lib/modules";
 
 // ─── Nav config with module keys, grouped ────────────────────────────────────
@@ -99,6 +100,8 @@ interface SidebarProps {
 export default function Sidebar({ collapsed, onToggle, user }: SidebarProps) {
   const router = useRouter();
   const { hasPermission } = useAuth();
+  const pendingVerifications = usePendingVerifications(hasPermission("verification"));
+  const badges: Partial<Record<ModuleKey, number>> = { verification: pendingVerifications };
 
   const handleLogout = async () => {
     await auth.signOut();
@@ -240,7 +243,7 @@ export default function Sidebar({ collapsed, onToggle, user }: SidebarProps) {
             {!collapsed && <div className="sb-section-label">{group.label}</div>}
             {group.items.map((item) => (
               <SidebarItem key={item.href} href={item.href} icon={item.icon}
-                label={item.label} collapsed={collapsed} />
+                label={item.label} collapsed={collapsed} badge={badges[item.module]} />
             ))}
           </div>
         ))}

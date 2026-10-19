@@ -25,7 +25,7 @@ import { signOutWithReason, recentLogoutReason, LOGOUT_MESSAGES } from "@/lib/se
 // closed browser, so coming back to a session that went idle long ago signs
 // out right away instead of resuming it.
 
-const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const WARNING_MS = 60 * 1000;
 const CHECK_EVERY_MS = 1000;
 const WRITE_THROTTLE_MS = 5000;

@@ -3,6 +3,7 @@
 import { Suspense } from "react";
 import { useState, useEffect, Fragment, useMemo, useRef } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import AdminLayout from "@/components/layout/AdminLayout";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import {
@@ -20,6 +21,7 @@ import { db } from "@/lib/firebase";
 import {
   Search, RefreshCw,
   GitBranch, Users, ChevronDown, ChevronUp, ExternalLink, X, BadgeCheck,
+  Wrench,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -47,6 +49,9 @@ interface ReferredUser {
   referral_code_used: string | null;
   joined_at: Timestamp | null;
   isVerified: string | null;
+  /** How many people signed up with THIS referred user's own code */
+  referralsCount: number;
+  verifiedReferrals: number;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -143,6 +148,8 @@ function ReferredPanel({
             referral_code_used: typeof data.referral_code_used === "string" ? data.referral_code_used : null,
             joined_at: data.joined_at instanceof Timestamp ? data.joined_at : null,
             isVerified: null as string | null,
+            referralsCount: 0,
+            verifiedReferrals: 0,
           };
         });
         const userDocs = await Promise.all(
@@ -152,6 +159,12 @@ function ReferredPanel({
           if (snap?.exists()) {
             const d = snap.data() as Record<string, unknown>;
             base[i].isVerified = typeof d.isVerified === "string" ? d.isVerified : null;
+            const map =
+              d.referrals && typeof d.referrals === "object" && !Array.isArray(d.referrals)
+                ? (d.referrals as Record<string, unknown>)
+                : {};
+            base[i].referralsCount = typeof map.referrals_count === "number" ? map.referrals_count : 0;
+            base[i].verifiedReferrals = typeof map.verified_referrals === "number" ? map.verified_referrals : 0;
           }
         });
         cache.current[userId] = base;
@@ -216,6 +229,19 @@ function ReferredPanel({
             </span>
           </span>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <Link
+          href={`/referrals/${userId}`}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            padding: "3px 10px", fontSize: 11, fontWeight: 700, borderRadius: 20,
+            border: "1px solid var(--blue)", color: "var(--blue)", background: "var(--blue-dim)",
+            textDecoration: "none",
+          }}
+          title="See who joined through this user, as a tree"
+        >
+          <GitBranch size={12} /> View tree
+        </Link>
         {!loading && referredUsers.length > 0 && (
           <div style={{ display: "flex", gap: 4 }}>
             {filterOptions.map(({ key, label }) => (
@@ -235,6 +261,7 @@ function ReferredPanel({
             ))}
           </div>
         )}
+        </div>
       </div>
 
       {loading ? (
@@ -247,7 +274,7 @@ function ReferredPanel({
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
-              {["Name", "Email", "Code Used", "Joined", "Status"].map((h) => (
+              {["Name", "Email", "Code Used", "Their Referrals", "Joined", "Status"].map((h) => (
                 <th key={h} style={{
                   padding: "7px 18px", textAlign: "left", fontSize: 10,
                   fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase",
@@ -285,6 +312,20 @@ function ReferredPanel({
                   {u.referral_code_used
                     ? <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 6px", color: "var(--text-primary)", letterSpacing: "0.5px" }}>{u.referral_code_used}</span>
                     : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                </td>
+                <td
+                  style={{ padding: "9px 18px", fontSize: 12, whiteSpace: "nowrap" }}
+                  title={`${u.referralsCount} people signed up with ${u.name}'s referral code (${u.verifiedReferrals} verified)`}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: u.referralsCount > 0 ? "var(--text-primary)" : "var(--text-muted)", fontWeight: 600 }}>
+                    <Users size={12} style={{ color: u.referralsCount > 0 ? "var(--blue)" : "var(--text-muted)" }} />
+                    {u.referralsCount}
+                  </span>
+                  {u.referralsCount > 0 && (
+                    <span style={{ marginLeft: 6, color: "var(--blue)", fontSize: 11 }}>
+                      {u.verifiedReferrals} verified
+                    </span>
+                  )}
                 </td>
                 <td style={{ padding: "9px 18px", fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
                   {formatDate(u.joined_at)}
@@ -758,6 +799,10 @@ function ReferralsPageInner() {
             <button className="ref-btn" onClick={handleRefresh} disabled={loading}>
               <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : {}} />
               Refresh
+            </button>
+            <button className="ref-btn" onClick={() => router.push("/referrals/referral-settings")}>
+              <Wrench size={14} />
+              Referral Settings
             </button>
           </div>
         </div>

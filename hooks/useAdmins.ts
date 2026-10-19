@@ -17,6 +17,7 @@ import { useAuth } from "@/context/AuthContext";
 import { writeLog, buildDescription } from "@/lib/activitylog";
 import type { ModuleKey } from "@/lib/modules";
 import type { AdminRole } from "@/context/AuthContext";
+import { readApiJson } from "@/lib/apiResponse";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,8 +126,8 @@ export function useAdmins() {
           });
 
           if (!res.ok) {
-            const body = await res.json();
-            return { success: false, error: body.error };
+            const body = await readApiJson(res);
+            return { success: false, error: body.error ?? `Failed to create admin (HTTP ${res.status}).` };
           }
 
           await fetchAdmins();
