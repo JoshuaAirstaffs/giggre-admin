@@ -81,6 +81,16 @@ export type VerificationLogAction =
   | "verification_document_viewed"
   | "verification_document_downloaded";
 
+// Gig Points actions are written by the giggre_app Cloud Functions
+// (gigPointsRequests.ts) except gig_points_settings_updated (this app).
+export type GigPointsLogAction =
+  | "gig_points_settings_updated"
+  | "gig_points_request_approved"
+  | "gig_points_request_rejected"
+  | "gig_points_admin_deposit"
+  | "gig_points_admin_withdraw"
+  | "gig_points_admin_transfer";
+
 export type SupportLogAction =
   | "ticket_status_updated"
   | "ticket_note";
@@ -97,7 +107,8 @@ export type LogAction =
   | ReferralLogAction
   | UserRequestLogAction
   | VerificationLogAction
-  | SupportLogAction;
+  | SupportLogAction
+  | GigPointsLogAction;
 
 export type LogModule =
   | "admin_management"
@@ -113,7 +124,8 @@ export type LogModule =
   | "user_requests"
   | "support"
   | "verification"
-  | "word_filter";
+  | "word_filter"
+  | "gig_points";
 
 export type ContentSectionKey =
   | "carousel_items"

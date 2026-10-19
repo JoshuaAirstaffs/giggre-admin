@@ -70,6 +70,11 @@ export const MODULE_CONFIG: Record<string, ModuleConfig> = {
     variant: "orange",
     accentColor: "var(--orange)",
   },
+  gig_points: {
+    label: "Gig Points",
+    variant: "amber",
+    accentColor: "var(--amber)",
+  },
   user_requests: {
     label: "User Requests",
     variant: "teal",
@@ -129,6 +134,14 @@ export const ACTION_CONFIG: Record<string, ActionConfig> = {
 
   // ── referrals  (module variant: green) ───────────────────────────────────
   referral_settings_updated: { label: "Referral Settings Updated", variant: "green" },
+
+  // ── gig_points  (module variant: amber) ─────────────────────────────────
+  gig_points_settings_updated: { label: "Gig Points Settings", variant: "amber" },
+  gig_points_request_approved: { label: "Points Request Approved", variant: "green" },
+  gig_points_request_rejected: { label: "Points Request Rejected", variant: "red" },
+  gig_points_admin_deposit:    { label: "Points Deposited", variant: "green" },
+  gig_points_admin_withdraw:   { label: "Points Withdrawn", variant: "amber" },
+  gig_points_admin_transfer:   { label: "Points Transferred", variant: "blue" },
 
   // ── user_requests  (module variant: teal) ────────────────────────────────
   user_request_approved: { label: "Request Approved", variant: "green" },

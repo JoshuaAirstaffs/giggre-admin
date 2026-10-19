@@ -8,7 +8,10 @@ import type { ModuleKey } from "@/lib/modules";
  * mirror the same required-permission literal in functions/index.js — the
  * Cloud Functions codebase doesn't share this package.
  */
-export type AdminNotificationType = "verification_request";
+export type AdminNotificationType =
+  | "verification_request"
+  | "gig_points_request"
+  | "gig_points_config_issue";
 
 export interface AdminNotification {
   id: string;
@@ -28,4 +31,6 @@ export interface AdminNotification {
 
 export const NOTIFICATION_TYPE_PERMISSIONS: Record<AdminNotificationType, ModuleKey> = {
   verification_request: "verification",
+  gig_points_request: "gig-points",
+  gig_points_config_issue: "gig-points",
 };
