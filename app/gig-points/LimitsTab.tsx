@@ -2,47 +2,41 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getDoc, setDoc, serverTimestamp } from "firebase/firestore";
-import { AlertCircle, Lock, Save } from "lucide-react";
+import { AlertCircle, ArrowRight, Lock, Save } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toaster";
 import type { AdminUser } from "@/context/AuthContext";
 import { writeLog } from "@/lib/activitylog";
 import {
-  GIG_POINTS_LIMITS_DOC, REQUEST_TYPES, REQUEST_TYPE_LABEL, parseLimits,
-  type RequestLimits, type RequestType, type TypeLimits,
+  GIG_POINTS_LIMITS_DOC, REQUEST_TYPES, REQUEST_TYPE_LABEL, DIRECTION_KEY, parseConversion, fmtMoney,
+  type ConversionConfig, type RequestType, type TypeLimits,
 } from "@/lib/gigPoints";
 
 const HINTS: Record<RequestType, string> = {
-  deposit: "User pays you outside the app, then asks for the points. Nothing is held.",
-  withdraw: "User cashes points out; you pay them outside the app. Points are held until you decide.",
-  transfer: "User sends points to another user. Points are held until you decide.",
+  to_cash: "User turns points into GigCash in their Gig Wallet. The points are held until you decide.",
+  to_points: "User spends GigCash to get points. The GigCash is taken from the wallet when requested and refunded if you reject it.",
+};
+const RATE_HINT: Record<RequestType, (r: number) => string> = {
+  to_cash: (r) => `${r.toLocaleString()} points → ${fmtMoney(1)}  ·  1,000 points → ${fmtMoney(Math.floor((1000 / r) * 100) / 100)}`,
+  to_points: (r) => `${fmtMoney(1)} → ${r.toLocaleString()} points  ·  ${fmtMoney(100)} → ${(100 * r).toLocaleString()} points`,
 };
 
-type TDraft = { enabled: boolean; min: string; max: string; dailyMax: string };
+type TDraft = { enabled: boolean; rate: string; min: string; max: string; dailyMax: string };
 type Draft = { enabled: boolean } & Record<RequestType, TDraft>;
 const s = (v: number | null) => (v == null ? "" : String(v));
-const toDraft = (l: RequestLimits): Draft => ({
-  enabled: l.enabled,
-  ...(Object.fromEntries(REQUEST_TYPES.map((t) => [t, { enabled: l[t].enabled, min: s(l[t].min), max: s(l[t].max), dailyMax: s(l[t].dailyMax) }])) as Record<RequestType, TDraft>),
+const toDraft = (c: ConversionConfig): Draft => ({
+  enabled: c.enabled,
+  ...(Object.fromEntries(REQUEST_TYPES.map((t) => {
+    const k = DIRECTION_KEY[t];
+    return [t, { enabled: c[k].enabled, rate: s(c.rates[k]), min: s(c[k].min), max: s(c[k].max), dailyMax: s(c[k].dailyMax) }];
+  })) as Record<RequestType, TDraft>),
 });
-/** "" → null (no limit); positive whole number; else NaN. */
+/** "" → null; positive whole number; else NaN. */
 const p = (v: string) => (v.trim() === "" ? null : /^\d+$/.test(v.trim()) && Number(v) > 0 ? Number(v) : NaN);
-const fromT = (d: TDraft): TypeLimits => ({ enabled: d.enabled, min: p(d.min), max: p(d.max), dailyMax: p(d.dailyMax) });
 const lim = (v: number | null) => (v == null ? "no limit" : v.toLocaleString());
 
-function problems(t: TypeLimits): string | null {
-  if ([t.min, t.max, t.dailyMax].some((v) => Number.isNaN(v))) return "Use whole numbers above 0, or leave empty for no limit.";
-  if (t.min != null && t.max != null && t.min > t.max) return "Minimum can't be more than the maximum.";
-  return null;
-}
-function warning(t: TypeLimits): string | null {
-  if (t.dailyMax != null && t.min != null && t.dailyMax < t.min) return "The daily cap is below the minimum, so no request can be made.";
-  if (t.dailyMax != null && t.max != null && t.max > t.dailyMax) return "The per-request maximum is above the daily cap; the daily cap wins.";
-  return null;
-}
-
 export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit: boolean }) {
-  const [saved, setSaved] = useState<RequestLimits>(parseLimits(undefined));
+  const [saved, setSaved] = useState<ConversionConfig>(parseConversion(undefined));
   const [exists, setExists] = useState(false);
   const [draft, setDraft] = useState<Draft>(toDraft(saved));
   const [loading, setLoading] = useState(true);
@@ -50,18 +44,36 @@ export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit:
 
   useEffect(() => {
     getDoc(GIG_POINTS_LIMITS_DOC).then((snap) => {
-      const l = parseLimits(snap.data());
-      setSaved(l); setDraft(toDraft(l)); setExists(snap.exists());
+      const c = parseConversion(snap.data());
+      setSaved(c); setDraft(toDraft(c)); setExists(snap.exists());
     }).catch((err) => {
-      console.error("[GigPoints] limits load", err);
-      toast.error("Couldn't load request limits");
+      console.error("[GigPoints] conversion load", err);
+      toast.error("Couldn't load conversion settings");
     }).finally(() => setLoading(false));
   }, []);
 
-  const current = useMemo<RequestLimits>(() => ({
-    enabled: draft.enabled, deposit: fromT(draft.deposit), withdraw: fromT(draft.withdraw), transfer: fromT(draft.transfer),
-  }), [draft]);
-  const errs = Object.fromEntries(REQUEST_TYPES.map((t) => [t, problems(current[t])])) as Record<RequestType, string | null>;
+  const parsed = useMemo(() => Object.fromEntries(REQUEST_TYPES.map((t) => {
+    const d = draft[t];
+    return [t, { enabled: d.enabled, rate: p(d.rate), min: p(d.min), max: p(d.max), dailyMax: p(d.dailyMax) }];
+  })) as Record<RequestType, TypeLimits & { rate: number | null }>, [draft]);
+
+  const errs = Object.fromEntries(REQUEST_TYPES.map((t) => {
+    const x = parsed[t];
+    let e: string | null = null;
+    if ([x.rate, x.min, x.max, x.dailyMax].some((v) => Number.isNaN(v))) e = "Use whole numbers above 0, or leave a limit empty for no limit.";
+    else if (x.enabled && x.rate == null) e = "Set a rate to turn this direction on.";
+    else if (x.min != null && x.max != null && x.min > x.max) e = "Minimum can't be more than the maximum.";
+    return [t, e];
+  })) as Record<RequestType, string | null>;
+  const warn = (t: RequestType) => {
+    const x = parsed[t];
+    if (x.dailyMax != null && x.min != null && x.dailyMax < x.min) return "The daily cap is below the minimum, so no request can be made.";
+    const cash = parsed.to_cash.rate, buy = parsed.to_points.rate;
+    if (t === "to_points" && cash && buy && buy > cash) {
+      return `Buying gives more points per ₱1 than cashing out takes (${buy} vs ${cash}), so users can profit by converting back and forth.`;
+    }
+    return null;
+  };
   const invalid = REQUEST_TYPES.some((t) => errs[t]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(toDraft(saved)) || !exists;
   const disabled = !canEdit || saving;
@@ -70,39 +82,49 @@ export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit:
     setDraft((d) => ({ ...d, [t]: { ...d[t], [k]: v } }));
 
   const save = async () => {
+    const x = parsed;
+    const next = {
+      enabled: draft.enabled,
+      rates: { toCash: x.to_cash.rate, toPoints: x.to_points.rate },
+      toCash: { enabled: x.to_cash.enabled, min: x.to_cash.min, max: x.to_cash.max, dailyMax: x.to_cash.dailyMax },
+      toPoints: { enabled: x.to_points.enabled, min: x.to_points.min, max: x.to_points.max, dailyMax: x.to_points.dailyMax },
+    };
     setSaving(true);
     try {
-      await setDoc(GIG_POINTS_LIMITS_DOC, { ...current, updatedAt: serverTimestamp(), updatedBy: user.uid });
-      const describe = (l: RequestLimits) => REQUEST_TYPES.map((t) =>
-        `${REQUEST_TYPE_LABEL[t]} ${l[t].enabled ? `on (min ${lim(l[t].min)}, max ${lim(l[t].max)}, daily ${lim(l[t].dailyMax)})` : "off"}`).join(" · ");
+      await setDoc(GIG_POINTS_LIMITS_DOC, { ...next, updatedAt: serverTimestamp(), updatedBy: user.uid });
+      const describe = REQUEST_TYPES.map((t) => {
+        const k = DIRECTION_KEY[t];
+        return `${REQUEST_TYPE_LABEL[t]} ${next[k].enabled ? `on at ${next.rates[k]} pts/₱1 (min ${lim(next[k].min)}, max ${lim(next[k].max)}, daily ${lim(next[k].dailyMax)})` : "off"}`;
+      }).join(" · ");
       await writeLog({
         actorId: user.uid, actorName: user.displayName ?? user.email ?? "Unknown", actorEmail: user.email ?? undefined,
         module: "gig_points", action: "gig_points_settings_updated",
-        description: `Updated Gig Points request limits — ${current.enabled ? describe(current) : "all requests paused"}`,
-        targetId: "general_config/gig_points_requests", targetName: "Gig Points request limits",
+        description: `Updated Gig Points conversion — ${next.enabled ? describe : "conversion paused"}`,
+        targetId: "general_config/gig_points_requests", targetName: "Gig Points conversion",
         affectedFiles: ["general_config/gig_points_requests"],
-        meta: { from: exists ? saved : null, to: current },
+        meta: { from: exists ? saved : null, to: next },
       });
-      setSaved(current); setDraft(toDraft(current)); setExists(true);
-      toast.success("Request limits saved", "They apply to new requests right away.");
+      const c = parseConversion(next as unknown as Record<string, unknown>);
+      setSaved(c); setDraft(toDraft(c)); setExists(true);
+      toast.success("Conversion settings saved", "New requests use them right away. Pending requests keep the rate they were made at.");
     } catch (err) {
-      console.error("[GigPoints] limits save", err);
-      toast.error("Save failed", (err as { code?: string })?.code === "permission-denied" ? "Only super admins can change limits." : "Please try again.");
+      console.error("[GigPoints] conversion save", err);
+      toast.error("Save failed", (err as { code?: string })?.code === "permission-denied" ? "Firestore refused the save. If you are a super admin, the deployed firestore.rules are out of date — deploy them from giggre_app (firebase.cmd deploy --only firestore:rules --project dev)." : "Please try again.");
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <div className="gp-empty">Loading request limits…</div>;
+  if (loading) return <div className="gp-empty">Loading conversion settings…</div>;
 
   return (
     <>
-      {!canEdit && <div className="gp-readonly"><Lock size={13} /> Only super admins can change request limits.</div>}
+      {!canEdit && <div className="gp-readonly"><Lock size={13} /> Only super admins can change conversion settings.</div>}
       <div className="gp-card" style={{ marginBottom: 16 }}>
         <div className="gp-head">
           <div>
-            <div className="gp-title">Requests from the app</div>
-            <div className="gp-hint">Master switch. When off, users can see their points but can&apos;t make deposit, withdraw or transfer requests. Pending requests can still be decided.</div>
+            <div className="gp-title">Conversion from the app</div>
+            <div className="gp-hint">Master switch. When off, users can see their points but can&apos;t request a conversion. Pending requests can still be decided.</div>
           </div>
           <label className="gp-switch">
             <input type="checkbox" checked={draft.enabled} disabled={disabled} onChange={(e) => setDraft((d) => ({ ...d, enabled: e.target.checked }))} />
@@ -114,22 +136,34 @@ export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit:
       <div className="gp-grid" style={{ opacity: draft.enabled ? 1 : 0.6 }}>
         {REQUEST_TYPES.map((t) => {
           const d = draft[t];
-          const w = warning(current[t]);
+          const rate = parsed[t].rate;
+          const w = warn(t);
           return (
             <div key={t} className={`gp-card ${errs[t] ? "err" : ""}`}>
               <div className="gp-head">
-                <div><div className="gp-title">{REQUEST_TYPE_LABEL[t]}</div><div className="gp-hint">{HINTS[t]}</div></div>
+                <div>
+                  <div className="gp-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {t === "to_cash" ? <>Points <ArrowRight size={14} /> GigCash</> : <>GigCash <ArrowRight size={14} /> Points</>}
+                  </div>
+                  <div className="gp-hint">{HINTS[t]}</div>
+                </div>
                 <label className="gp-switch">
                   <input type="checkbox" checked={d.enabled} disabled={disabled} onChange={(e) => setT(t, "enabled", e.target.checked)} />
                   {d.enabled ? "On" : "Off"}
                 </label>
               </div>
+              <div>
+                <label className="gp-label">Rate — points per ₱1</label>
+                <input className="gp-input" type="number" min={1} step={1} inputMode="numeric" placeholder={t === "to_cash" ? "e.g. 100" : "e.g. 80"}
+                  value={d.rate} disabled={disabled} onChange={(e) => setT(t, "rate", e.target.value)} style={{ maxWidth: 220 }} />
+                {rate != null && !Number.isNaN(rate) && <div className="gp-note" style={{ marginTop: 6 }}>{RATE_HINT[t](rate)}</div>}
+              </div>
               <div className="gp-row">
                 {(["min", "max", "dailyMax"] as const).map((k) => (
                   <div key={k}>
-                    <label className="gp-label">{k === "min" ? "Min / request" : k === "max" ? "Max / request" : "Daily cap / user"}</label>
+                    <label className="gp-label">{k === "min" ? "Min points" : k === "max" ? "Max points" : "Daily cap / user"}</label>
                     <input className="gp-input" type="number" min={1} step={1} inputMode="numeric" placeholder="No limit"
-                      value={d[k]} disabled={disabled || !d.enabled} onChange={(e) => setT(t, k, e.target.value)} />
+                      value={d[k]} disabled={disabled} onChange={(e) => setT(t, k, e.target.value)} />
                   </div>
                 ))}
               </div>
@@ -141,14 +175,15 @@ export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit:
       </div>
 
       <div className="gp-note" style={{ marginBottom: 14 }}>
-        The daily cap counts everything a user requested of that type on the same day (Philippine time), whether pending or approved.
-        Rejected and cancelled requests don&apos;t count. Each user can have only one request waiting for review at a time, of any type.
-        {!exists && " These limits haven't been saved yet, so requests are closed until you save."}
+        All limits are in points. Cashing out rounds the peso amount down to the centavo; buying rounds the cost up. The rate is locked onto
+        each request when it&apos;s made. The daily cap counts everything a user converted in that direction on the same day (Philippine time),
+        whether pending or approved; rejected and cancelled requests don&apos;t count. Each user can have only one request waiting for review
+        at a time. {!exists && "These settings haven't been saved yet, so conversion is closed until you save."}
       </div>
 
       {canEdit && (
         <div className="gp-bar">
-          <span className="gp-bar-text">{invalid ? "Fix the highlighted limits." : dirty ? "You have unsaved changes." : "All changes saved."}</span>
+          <span className="gp-bar-text">{invalid ? "Fix the highlighted settings." : dirty ? "You have unsaved changes." : "All changes saved."}</span>
           <span className="gp-bar-actions">
             <Button variant="ghost" size="sm" onClick={() => setDraft(toDraft(saved))} disabled={!dirty || saving || !exists}>Discard</Button>
             <Button size="sm" icon={Save} loading={saving} disabled={!dirty || invalid || saving} onClick={save}>Save changes</Button>

@@ -8,14 +8,14 @@ import {
   Map, MegaphoneIcon, File, BadgeCheck,
   ClipboardList, Zap, Wrench, Gift, Headphones, BarChart3, Flag,
   LucideIcon,
-  Filter, Coins,
+  Filter, Coins, Wallet,
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import type { AdminUser } from "@/context/AuthContext";
 import { useAuth } from "@/context/AuthContext";
 import SidebarItem from "./SidebarItem";
 import { usePendingVerifications } from "@/hooks/usePendingVerifications";
-import { usePendingGigPointsRequests } from "@/hooks/usePendingGigPointsRequests";
+import { usePendingGigPointsRequests, usePendingWalletRequests } from "@/hooks/usePendingGigPointsRequests";
 import type { ModuleKey } from "@/lib/modules";
 
 // ─── Nav config with module keys, grouped ────────────────────────────────────
@@ -62,6 +62,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/user-skills",  icon: Wrench,     label: "User Skills",  module: "library-gsin" },
       { href: "/referrals",    icon: Gift,       label: "Referrals",    module: "referrals" },
       { href: "/gig-points",   icon: Coins,      label: "Gig Points",   module: "gig-points" },
+      { href: "/wallet",       icon: Wallet,     label: "Gig Wallet",   module: "wallet" },
       { href: "/user-reports", icon: Flag,       label: "User Reports", module: "user-reports" },
     ],
   },
@@ -104,9 +105,11 @@ export default function Sidebar({ collapsed, onToggle, user }: SidebarProps) {
   const { hasPermission } = useAuth();
   const pendingVerifications = usePendingVerifications(hasPermission("verification"));
   const pendingPointsRequests = usePendingGigPointsRequests(hasPermission("gig-points"));
+  const pendingWalletRequests = usePendingWalletRequests(hasPermission("wallet"));
   const badges: Partial<Record<ModuleKey, number>> = {
     verification: pendingVerifications,
     "gig-points": pendingPointsRequests,
+    wallet: pendingWalletRequests,
   };
 
   const handleLogout = async () => {

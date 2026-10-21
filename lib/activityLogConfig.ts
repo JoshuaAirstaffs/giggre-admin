@@ -75,6 +75,11 @@ export const MODULE_CONFIG: Record<string, ModuleConfig> = {
     variant: "amber",
     accentColor: "var(--amber)",
   },
+  wallet: {
+    label: "Gig Wallet",
+    variant: "teal",
+    accentColor: "var(--teal, #0d9488)",
+  },
   user_requests: {
     label: "User Requests",
     variant: "teal",
@@ -137,11 +142,15 @@ export const ACTION_CONFIG: Record<string, ActionConfig> = {
 
   // ── gig_points  (module variant: amber) ─────────────────────────────────
   gig_points_settings_updated: { label: "Gig Points Settings", variant: "amber" },
-  gig_points_request_approved: { label: "Points Request Approved", variant: "green" },
-  gig_points_request_rejected: { label: "Points Request Rejected", variant: "red" },
-  gig_points_admin_deposit:    { label: "Points Deposited", variant: "green" },
-  gig_points_admin_withdraw:   { label: "Points Withdrawn", variant: "amber" },
-  gig_points_admin_transfer:   { label: "Points Transferred", variant: "blue" },
+  gig_points_request_approved: { label: "Conversion Approved", variant: "green" },
+  gig_points_request_rejected: { label: "Conversion Rejected", variant: "red" },
+  gig_points_adjusted:         { label: "Points Adjusted", variant: "amber" },
+
+  // ── wallet  (module variant: teal) ────────────────────────────────────
+  wallet_settings_updated: { label: "Wallet Settings", variant: "teal" },
+  wallet_request_approved: { label: "Wallet Request Approved", variant: "green" },
+  wallet_request_rejected: { label: "Wallet Request Rejected", variant: "red" },
+  wallet_adjusted:         { label: "Wallet Adjusted", variant: "amber" },
 
   // ── user_requests  (module variant: teal) ────────────────────────────────
   user_request_approved: { label: "Request Approved", variant: "green" },

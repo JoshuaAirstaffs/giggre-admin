@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { collection, doc, getDoc, limit, onSnapshot, orderBy, query, where } from "firebase/firestore";
-import { Check, X, ArrowRight, Inbox } from "lucide-react";
+import { Check, X, Inbox } from "lucide-react";
 import { db } from "@/lib/firebase";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -10,7 +10,7 @@ import Modal from "@/components/ui/Modal";
 import { toast } from "@/components/ui/Toaster";
 import type { AdminUser } from "@/context/AuthContext";
 import {
-  REQUEST_TYPES, REQUEST_TYPE_LABEL, parseRequest, decideGigPointsRequest, callableError,
+  REQUEST_TYPES, REQUEST_TYPE_LABEL, parseRequest, decideGigPointsRequest, callableError, fmtMoney,
   type PointsRequest, type RequestStatus, type RequestType,
 } from "@/lib/gigPoints";
 
@@ -25,17 +25,18 @@ const STATUS_BADGE: Record<RequestStatus, "amber" | "green" | "red" | "gray"> = 
   pending: "amber", approved: "green", rejected: "red", cancelled: "gray",
 };
 const TYPE_BADGE: Record<RequestType, "green" | "orange" | "blue"> = {
-  deposit: "green", withdraw: "orange", transfer: "blue",
+  to_cash: "orange", to_points: "blue",
 };
+const typeLabel = (r: PointsRequest) =>
+  r.type ? REQUEST_TYPE_LABEL[r.type] : `Old ${r.legacyType ?? "request"}`;
 const dt = (d: Date | null) =>
   d ? d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
 const n = (v: number) => v.toLocaleString();
 
 /** What approving actually does, spelled out for the admin. */
 const APPROVE_EFFECT: Record<RequestType, (r: PointsRequest) => string> = {
-  deposit: (r) => `${n(r.points)} points will be added to ${r.userName}'s balance. Only approve once you've received their payment.`,
-  withdraw: (r) => `The ${n(r.points)} held points will be removed for good. Only approve once you've paid ${r.userName} out.`,
-  transfer: (r) => `The ${n(r.points)} held points will move from ${r.userName} to ${r.recipientName ?? "the recipient"}.`,
+  to_cash: (r) => `The ${n(r.points)} held points are used up and ${fmtMoney(r.cash, r.currencyCode)} is added to ${r.userName}'s Gig Wallet.`,
+  to_points: (r) => `The ${fmtMoney(r.cash, r.currencyCode)} already taken from ${r.userName}'s Gig Wallet is kept and ${n(r.points)} points are added to their balance.`,
 };
 
 export default function RequestsTab({ user }: { user: AdminUser }) {
@@ -94,7 +95,7 @@ export default function RequestsTab({ user }: { user: AdminUser }) {
             <table className="gp-table">
               <thead>
                 <tr>
-                  <th>Requested</th><th>User</th><th>Type</th><th style={{ textAlign: "right" }}>Points</th>
+                  <th>Requested</th><th>User</th><th>Conversion</th><th style={{ textAlign: "right" }}>Points</th><th style={{ textAlign: "right" }}>GigCash</th>
                   <th>Details</th><th>Status</th><th style={{ textAlign: "right" }}>Action</th>
                 </tr>
               </thead>
@@ -103,19 +104,23 @@ export default function RequestsTab({ user }: { user: AdminUser }) {
                   <tr key={r.id}>
                     <td>{dt(r.createdAt)}{r.source === "admin" && <div className="gp-sub">By admin</div>}</td>
                     <td>{r.userName}<div className="gp-sub">{r.userCode ?? r.userId}</div></td>
-                    <td><Badge variant={TYPE_BADGE[r.type]}>{REQUEST_TYPE_LABEL[r.type]}</Badge></td>
+                    <td><Badge variant={r.type ? TYPE_BADGE[r.type] : "gray"}>{typeLabel(r)}</Badge></td>
                     <td style={{ textAlign: "right" }}>
-                      <span className={`gp-pts ${r.type === "deposit" ? "plus" : "minus"}`}>
-                        {r.type === "deposit" ? "+" : "−"}{n(r.points)}
+                      <span className={`gp-pts ${r.type === "to_points" ? "plus" : "minus"}`}>
+                        {r.type === "to_points" ? "+" : "−"}{n(r.points)}
                       </span>
                     </td>
+                    <td style={{ textAlign: "right" }}>
+                      {r.type ? (
+                        <>
+                          <span className={`gp-pts ${r.type === "to_cash" ? "plus" : "minus"}`}>
+                            {r.type === "to_cash" ? "+" : "−"}{fmtMoney(r.cash, r.currencyCode)}
+                          </span>
+                          {r.rate != null && <div className="gp-sub">{n(r.rate)} pts / ₱1</div>}
+                        </>
+                      ) : <span className="gp-sub">—</span>}
+                    </td>
                     <td style={{ maxWidth: 280 }}>
-                      {r.type === "transfer" && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                          <ArrowRight size={12} /> {r.recipientName}
-                          <span className="gp-sub">{r.recipientCode}</span>
-                        </div>
-                      )}
                       {r.note && <div className="gp-sub" style={{ whiteSpace: "pre-wrap" }}>“{r.note}”</div>}
                       {r.status !== "pending" && (r.decisionNote || r.reference || r.decidedByName) && (
                         <div className="gp-sub" style={{ marginTop: 4 }}>
@@ -129,7 +134,7 @@ export default function RequestsTab({ user }: { user: AdminUser }) {
                     <td>
                       {r.status === "pending" && (
                         <div className="gp-actions">
-                          <Button size="sm" variant="success" icon={Check} onClick={() => setActing({ req: r, decision: "approve" })}>Approve</Button>
+                          {r.type && <Button size="sm" variant="success" icon={Check} onClick={() => setActing({ req: r, decision: "approve" })}>Approve</Button>}
                           <Button size="sm" variant="ghost" icon={X} onClick={() => setActing({ req: r, decision: "reject" })}>Reject</Button>
                         </div>
                       )}
@@ -153,7 +158,7 @@ function DecisionModal({ req, decision, onClose }: { req: PointsRequest; decisio
   const [busy, setBusy] = useState(false);
   const [bal, setBal] = useState<{ balance: number; held: number } | null>(null);
   const approve = decision === "approve";
-  const label = REQUEST_TYPE_LABEL[req.type].toLowerCase();
+  const label = req.type ? "conversion" : "old request";
 
   useEffect(() => {
     getDoc(doc(db, "gig_points", req.userId)).then((s) => {
@@ -172,8 +177,8 @@ function DecisionModal({ req, decision, onClose }: { req: PointsRequest; decisio
         note: note.trim() || undefined,
         reference: reference.trim() || undefined,
       });
-      toast.success(approve ? `${REQUEST_TYPE_LABEL[req.type]} approved` : "Request rejected",
-        approve ? "The user has been notified." : "The user has been notified and any held points returned.");
+      toast.success(approve ? "Conversion approved" : "Request rejected",
+        approve ? "The user has been notified." : "The user has been notified and anything on hold was returned.");
       onClose();
     } catch (err) {
       toast.error(approve ? "Couldn't approve" : "Couldn't reject", callableError(err));
@@ -196,26 +201,27 @@ function DecisionModal({ req, decision, onClose }: { req: PointsRequest; decisio
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <dl className="gp-summary">
           <dt>User</dt><dd>{req.userName} {req.userCode && <span className="gp-sub">({req.userCode})</span>}</dd>
-          <dt>Type</dt><dd>{REQUEST_TYPE_LABEL[req.type]}</dd>
+          <dt>Conversion</dt><dd>{typeLabel(req)}</dd>
           <dt>Points</dt><dd className="gp-pts">{n(req.points)}</dd>
-          {req.type === "transfer" && <><dt>To</dt><dd>{req.recipientName} {req.recipientCode && <span className="gp-sub">({req.recipientCode})</span>}</dd></>}
+          {req.type && <><dt>GigCash</dt><dd className="gp-pts">{fmtMoney(req.cash, req.currencyCode)}</dd></>}
+          {req.rate != null && <><dt>Rate</dt><dd>{n(req.rate)} points per ₱1 (locked when requested)</dd></>}
           {req.note && <><dt>User note</dt><dd style={{ whiteSpace: "pre-wrap" }}>{req.note}</dd></>}
           <dt>Balance</dt><dd>{bal ? `${n(bal.balance)} available · ${n(bal.held)} on hold` : "…"}</dd>
         </dl>
         <div className="gp-note">
-          {approve ? APPROVE_EFFECT[req.type](req)
-            : `${req.userName} will be told why.${req.type !== "deposit" ? ` The ${n(req.points)} held points go back to their balance.` : ""}`}
+          {approve && req.type ? APPROVE_EFFECT[req.type](req)
+            : `${req.userName} will be told why. ${req.type === "to_points" ? `${fmtMoney(req.cash, req.currencyCode)} is refunded to their Gig Wallet.` : "Any held points go back to their balance."}`}
         </div>
-        {approve && req.type !== "transfer" && (
+        {approve && (
           <div>
-            <label className="gp-label">{req.type === "deposit" ? "Payment reference (optional)" : "Payout reference (optional)"}</label>
-            <input className="gp-input" maxLength={200} value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. GCash ref no." disabled={busy} />
+            <label className="gp-label">Reference (optional, internal)</label>
+            <input className="gp-input" maxLength={200} value={reference} onChange={(e) => setReference(e.target.value)} disabled={busy} />
           </div>
         )}
         <div>
           <label className="gp-label">{approve ? "Note (optional, internal)" : "Reason (shown to the user)"}</label>
           <textarea className="gp-textarea" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} disabled={busy}
-            placeholder={approve ? "" : "e.g. Payment not received"} />
+            placeholder={approve ? "" : "e.g. Suspicious activity on this account"} />
         </div>
       </div>
     </Modal>

@@ -11,7 +11,8 @@ import type { ModuleKey } from "@/lib/modules";
 export type AdminNotificationType =
   | "verification_request"
   | "gig_points_request"
-  | "gig_points_config_issue";
+  | "gig_points_config_issue"
+  | "wallet_request";
 
 export interface AdminNotification {
   id: string;
@@ -33,4 +34,5 @@ export const NOTIFICATION_TYPE_PERMISSIONS: Record<AdminNotificationType, Module
   verification_request: "verification",
   gig_points_request: "gig-points",
   gig_points_config_issue: "gig-points",
+  wallet_request: "wallet",
 };

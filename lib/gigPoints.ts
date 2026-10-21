@@ -24,15 +24,18 @@ export const GIG_POINTS_LIMITS_DOC = doc(db, "general_config", "gig_points_reque
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export const REQUEST_TYPES = ["deposit", "withdraw", "transfer"] as const;
+export const REQUEST_TYPES = ["to_cash", "to_points"] as const;
 export type RequestType = (typeof REQUEST_TYPES)[number];
 export type RequestStatus = "pending" | "approved" | "rejected" | "cancelled";
 
 export const REQUEST_TYPE_LABEL: Record<RequestType, string> = {
-  deposit: "Deposit",
-  withdraw: "Withdraw",
-  transfer: "Transfer",
+  to_cash: "Points → GigCash",
+  to_points: "GigCash → Points",
 };
+
+/** Peso amount, e.g. ₱12.50 */
+export const fmtMoney = (n: number, ccy = "PHP") =>
+  `${ccy === "PHP" ? "₱" : `${ccy} `}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export const GIG_TYPES = [
   { key: "quick",   label: "Quick Gig",   hint: "Instant gigs matched on the spot (quick_gigs)" },
@@ -43,7 +46,12 @@ export type GigTypeKey = (typeof GIG_TYPES)[number]["key"];
 
 export interface PointsRequest {
   id: string;
-  type: RequestType;
+  /** null for old deposit/withdraw/transfer requests (can only be rejected). */
+  type: RequestType | null;
+  legacyType: string | null;
+  cash: number;
+  currencyCode: string;
+  rate: number | null;
   status: RequestStatus;
   points: number;
   note: string | null;
@@ -67,7 +75,11 @@ const s = (v: unknown) => (typeof v === "string" && v ? v : null);
 export function parseRequest(id: string, d: Record<string, unknown>): PointsRequest {
   return {
     id,
-    type: (REQUEST_TYPES as readonly string[]).includes(d.type as string) ? (d.type as RequestType) : "deposit",
+    type: (REQUEST_TYPES as readonly string[]).includes(d.type as string) ? (d.type as RequestType) : null,
+    legacyType: (REQUEST_TYPES as readonly string[]).includes(d.type as string) ? null : s(d.type),
+    cash: typeof d.cash === "number" ? d.cash : 0,
+    currencyCode: s(d.currencyCode) ?? "PHP",
+    rate: typeof d.rate === "number" ? d.rate : null,
     status: (d.status as RequestStatus) ?? "pending",
     points: typeof d.points === "number" ? d.points : 0,
     note: s(d.note),
@@ -109,20 +121,33 @@ export function parseRewardConfig(d: Record<string, unknown> | undefined): Rewar
   };
 }
 
-// ── Request limits (general_config/gig_points_requests) ───────────────────────
+// ── Conversion (general_config/gig_points_requests) ───────────────────────────
 
 export interface TypeLimits { enabled: boolean; min: number | null; max: number | null; dailyMax: number | null }
-export interface RequestLimits { enabled: boolean; deposit: TypeLimits; withdraw: TypeLimits; transfer: TypeLimits }
+export interface ConversionConfig {
+  enabled: boolean;
+  /** Points per ₱1 — toCash when cashing out, toPoints when buying points. */
+  rates: { toCash: number | null; toPoints: number | null };
+  toCash: TypeLimits;
+  toPoints: TypeLimits;
+}
+export const DIRECTION_KEY: Record<RequestType, "toCash" | "toPoints"> = { to_cash: "toCash", to_points: "toPoints" };
 
 const posInt = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null);
 
-/** Mirrors parseLimits() in gigPointsRequests.ts — missing doc = all closed. */
-export function parseLimits(d: Record<string, unknown> | undefined): RequestLimits {
-  const t = (k: RequestType): TypeLimits => {
+/** Mirrors parseConversionConfig() in gigPointsRequests.ts — missing doc = closed. */
+export function parseConversion(d: Record<string, unknown> | undefined): ConversionConfig {
+  const t = (k: "toCash" | "toPoints"): TypeLimits => {
     const r = (d?.[k] ?? {}) as Record<string, unknown>;
     return { enabled: r.enabled === true, min: posInt(r.min), max: posInt(r.max), dailyMax: posInt(r.dailyMax) };
   };
-  return { enabled: !!d && d.enabled !== false, deposit: t("deposit"), withdraw: t("withdraw"), transfer: t("transfer") };
+  const rates = (d?.rates ?? {}) as Record<string, unknown>;
+  return {
+    enabled: !!d && d.enabled !== false,
+    rates: { toCash: posInt(rates.toCash), toPoints: posInt(rates.toPoints) },
+    toCash: t("toCash"),
+    toPoints: t("toPoints"),
+  };
 }
 
 // ── Callables ─────────────────────────────────────────────────────────────────
@@ -132,15 +157,17 @@ export const decideGigPointsRequest = call<
   { status: RequestStatus }
 >("decideGigPointsRequest");
 
-export const adminGigPointsAction = call<
-  { action: RequestType; userId: string; toUserId?: string; points: number; reason: string },
-  { requestId: string; balance: number }
->("adminGigPointsAction");
+/** Manual add (+) / remove (−) of points — adjustGigPoints in gigPoints.ts. */
+export const adjustGigPoints = call<
+  { userId: string; points: number; reason: string },
+  { balance: number; transactionId: string }
+>("adjustGigPoints");
 
 export interface FoundUser {
   uid: string; name: string; code: string | null; photoUrl: string | null;
   phone: string | null; email: string | null;
   balance: number; heldPoints: number; pendingPoints: number; lifetimeEarned: number;
+  walletBalance: number; currencyCode: string;
 }
 export const adminFindGigPointsUser = call<{ query: string }, FoundUser>("adminFindGigPointsUser");
 

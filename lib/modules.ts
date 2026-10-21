@@ -17,7 +17,8 @@ export type ModuleKey =
   | "word-filter"
   | "verification"
   | "referrals"
-  | "gig-points";
+  | "gig-points"
+  | "wallet";
 
 export interface ModuleMeta {
   key: ModuleKey;
@@ -47,6 +48,7 @@ export const ALL_MODULES: ModuleMeta[] = [
   { key: "verification",       label: "Verification Requests",   href: "/verification" },
   { key: "referrals",          label: "Referrals",               href: "/referrals" },
   { key: "gig-points",         label: "Gig Points",              href: "/gig-points" },
+  { key: "wallet",             label: "Gig Wallet",              href: "/wallet" },
 ];
 
 /** Modules regular admins can be granted access to (super_admin always has all) */

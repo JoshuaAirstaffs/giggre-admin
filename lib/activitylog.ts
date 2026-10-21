@@ -86,10 +86,15 @@ export type VerificationLogAction =
 export type GigPointsLogAction =
   | "gig_points_settings_updated"
   | "gig_points_request_approved"
-  | "gig_points_request_rejected"
-  | "gig_points_admin_deposit"
-  | "gig_points_admin_withdraw"
-  | "gig_points_admin_transfer";
+  | "gig_points_request_rejected";
+
+// Wallet actions are written by the giggre_app Cloud Functions
+// (walletRequests.ts / wallet.ts) except wallet_settings_updated (this app).
+export type WalletLogAction =
+  | "wallet_settings_updated"
+  | "wallet_request_approved"
+  | "wallet_request_rejected"
+  | "wallet_adjusted";
 
 export type SupportLogAction =
   | "ticket_status_updated"
@@ -108,7 +113,8 @@ export type LogAction =
   | UserRequestLogAction
   | VerificationLogAction
   | SupportLogAction
-  | GigPointsLogAction;
+  | GigPointsLogAction
+  | WalletLogAction;
 
 export type LogModule =
   | "admin_management"
@@ -125,7 +131,8 @@ export type LogModule =
   | "support"
   | "verification"
   | "word_filter"
-  | "gig_points";
+  | "gig_points"
+  | "wallet";
 
 export type ContentSectionKey =
   | "carousel_items"

@@ -17,9 +17,9 @@ import { GP_STYLES } from "./styles";
 type TabKey = "requests" | "manual" | "rewards" | "limits" | "issues";
 const TABS: { key: TabKey; label: string; icon: LucideIcon }[] = [
   { key: "requests", label: "Requests",        icon: Inbox },
-  { key: "manual",   label: "Manual actions",  icon: HandCoins },
+  { key: "manual",   label: "Adjust points",   icon: HandCoins },
   { key: "rewards",  label: "Earning rewards", icon: Trophy },
-  { key: "limits",   label: "Request limits",  icon: SlidersHorizontal },
+  { key: "limits",   label: "Conversion",      icon: SlidersHorizontal },
   { key: "issues",   label: "Config issues",   icon: AlertTriangle },
 ];
 
@@ -38,7 +38,7 @@ function GigPointsPage() {
   if (!user) return null;
 
   return (
-    <AdminLayout title="Gig Points" subtitle="Review deposit, withdraw and transfer requests, and set how many points each gig type earns">
+    <AdminLayout title="Gig Points" subtitle="Review Points ⇄ GigCash conversions, set conversion rates, and set how many points each gig type earns">
       <style>{GP_STYLES}</style>
       <div className="gp-tabs" role="tablist">
         {TABS.map(({ key, label, icon: Icon }) => (

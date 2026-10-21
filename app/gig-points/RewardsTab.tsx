@@ -69,7 +69,7 @@ export default function RewardsTab({ user, canEdit }: { user: AdminUser; canEdit
       toast.success("Earning rewards saved", "New approvals use them within about a minute.");
     } catch (err) {
       console.error("[GigPoints] reward config save", err);
-      toast.error("Save failed", (err as { code?: string })?.code === "permission-denied" ? "Only super admins can change rewards." : "Please try again.");
+      toast.error("Save failed", (err as { code?: string })?.code === "permission-denied" ? "Firestore refused the save. If you are a super admin, the deployed firestore.rules are out of date — deploy them from giggre_app (firebase.cmd deploy --only firestore:rules --project dev)." : "Please try again.");
     } finally {
       setSaving(false);
     }
