@@ -127,8 +127,8 @@ function formatDate(ts: Timestamp | null): string {
   });
 }
 
-function formatBalance(n: number, symbol: string): string {
-  return symbol + new Intl.NumberFormat("en-US", {
+function formatBalance(n: number): string {
+  return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(n ?? 0);
@@ -1515,7 +1515,7 @@ export default function UserProfilePage() {
         <SectionCard title="Identity" icon={User}>
           <InfoRow label="User ID" value={userData.id} mono />
           <InfoRow label="Phone" value={userData.phone} />
-          <InfoRow label="Balance" value={<strong>{formatBalance(userData.balance, symbol)}</strong>} />
+          <InfoRow label="Balance" value={<strong>{formatBalance(userData.balance)}</strong>} />
           <InfoRow label="Date Registered" value={formatDate(userData.createdAt)} />
           <InfoRow
             label="Referred By"
