@@ -28,8 +28,10 @@ export interface BaseItem {
 }
 
 export interface CarouselItem extends BaseItem {
-  picture: string; // Image URL (Firebase Storage or external URL)
+  picture: string; // Image URL (Firebase Storage or external URL) — also the video's cover
   imageName: string; // Name given by admin
+  /** Optional MP4 URL. Apps that can't play it keep showing `picture`. */
+  video?: string;
 }
 
 export interface UpdateItem extends BaseItem {
@@ -138,7 +140,7 @@ export function emptyItemForSection(key: ContentSectionKey): Partial<ContentItem
   const base = { sortNumber: 1 };
   switch (key) {
     case "carousel_items":
-      return { ...base, picture: "", imageName: "" };
+      return { ...base, picture: "", imageName: "", video: "" };
     case "updates":
       return { ...base, category: "", title: "", body: "" };
     case "about_giggre":
@@ -346,6 +348,7 @@ export function useContent(actor: ActorInfo) {
           case "carousel_items":
             if ("picture" in form) payload.picture = form.picture;
             if ("imageName" in form) payload.imageName = form.imageName;
+            if ("video" in form) payload.video = (form as Partial<CarouselItem>).video ?? "";
             break;
           case "updates":
             if ("category" in form) payload.category = (form as any).category ?? "";

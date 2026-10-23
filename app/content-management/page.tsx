@@ -23,12 +23,14 @@ import {
 } from "@/hooks/useContent";
 import { AboutGiggrePanel } from "@/components/ui/content/AboutGiggrePanel";
 import { ImageUploadField } from "@/components/ui/content/ImageUploadField";
+import { VideoUploadField } from "@/components/ui/content/VideoUploadField";
+import { CarouselPreview } from "@/components/ui/content/CarouselPreview";
 import { deleteOwnedImage } from "@/lib/storageCleanup";
 import type { ContentSectionKey } from "@/lib/activitylog";
 import {
   Plus, Edit2, Trash2, Settings, Tag, Shuffle,
   Image, HelpCircle, Shield, ScrollText, Info, RefreshCw,
-  X, AlertCircle, Check, ChevronLeft, ChevronRight,
+  X, AlertCircle, Check, ChevronLeft, ChevronRight, Info as InfoIcon,
 } from "lucide-react";
 import type { SectionState } from "@/hooks/usePerSectionData";
 
@@ -269,6 +271,12 @@ function pictureOf(item: Partial<ContentItem>): string | undefined {
   return typeof picture === "string" ? picture : undefined;
 }
 
+/** Optional carousel video URL. */
+function videoOf(item: Partial<ContentItem>): string | undefined {
+  const video = (item as { video?: unknown }).video;
+  return typeof video === "string" && video ? video : undefined;
+}
+
 function ItemForm({
   sectionKey,
   initial,
@@ -295,14 +303,17 @@ function ItemForm({
     setForm((prev: any) => ({ ...prev, [key]: value }));
   const [uploading, setUploading] = useState(false);
   const [imageValid, setImageValid] = useState(true);
+  const [videoUploading, setVideoUploading] = useState(false);
+  const busy = uploading || videoUploading;
 
   // Images uploaded while this form was open. When it closes, any that weren't
   // the one saved (replaced, removed, or the form was cancelled) are deleted.
   const uploadedRef = useRef<string[]>([]);
   const savedPictureRef = useRef<string | null>(null);
+  const savedVideoRef = useRef<string | null>(null);
   useEffect(() => () => {
     uploadedRef.current
-      .filter((url) => url !== savedPictureRef.current)
+      .filter((url) => url !== savedPictureRef.current && url !== savedVideoRef.current)
       .forEach((url) => deleteOwnedImage(url));
   }, []);
 
@@ -311,20 +322,36 @@ function ItemForm({
     form.sortNumber > 0 &&
     takenSortNumbers.filter(n => n !== (isEdit ? initial.sortNumber : null)).includes(form.sortNumber);
 
-  // A carousel slide without an image can be saved, but only as hidden (sort 0)
-  const carouselNoImage = sectionKey === "carousel_items" && !form.picture?.trim();
+  // A carousel slide needs an image or a video to show; with neither it can
+  // still be saved, but only as hidden (sort 0)
+  const hasMedia = (f: any) => !!f.picture?.trim() || !!f.video?.trim();
+  const carouselNoImage = sectionKey === "carousel_items" && !hasMedia(form);
   const lastSortRef = useRef<number>(0);
-  const setPicture = (url: string) =>
+  const setMedia = (key: "picture" | "video", url: string) =>
     setForm((prev: any) => {
-      if (sectionKey !== "carousel_items") return { ...prev, picture: url };
-      if (!url.trim()) {
+      const next = { ...prev, [key]: url };
+      if (sectionKey !== "carousel_items") return next;
+      if (hasMedia(prev) && !hasMedia(next)) {
         if (prev.sortNumber > 0) lastSortRef.current = prev.sortNumber;
-        return { ...prev, picture: url, sortNumber: 0 };
+        return { ...next, sortNumber: 0 };
       }
-      // Image back: restore the slide's previous position if it had one
-      const restore = !prev.picture?.trim() && prev.sortNumber === 0 && lastSortRef.current > 0;
-      return { ...prev, picture: url, ...(restore ? { sortNumber: lastSortRef.current } : {}) };
+      // Media back: restore the slide's previous position if it had one
+      const restore = !hasMedia(prev) && hasMedia(next) && prev.sortNumber === 0 && lastSortRef.current > 0;
+      return restore ? { ...next, sortNumber: lastSortRef.current } : next;
     });
+  const setPicture = (url: string) => setMedia("picture", url);
+
+  // One media per slide: an image OR a video. Switching type clears the other
+  // (the old file is removed from Storage when the slide is saved).
+  const [mediaType, setMediaType] = useState<"image" | "video">(
+    (initial as { video?: string }).video ? "video" : "image"
+  );
+  const switchMediaType = (t: "image" | "video") => {
+    if (t === mediaType) return;
+    setMediaType(t);
+    setImageValid(true);
+    setMedia(t === "video" ? "picture" : "video", "");
+  };
 
   const canSubmit =
     sectionKey === "carousel_items"
@@ -342,29 +369,98 @@ function ItemForm({
         .if-sort-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
         .if-select { width: 100%; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 12px; color: var(--text-primary); font-size: 13px; outline: none; font-family: inherit; transition: border-color 0.2s; }
         .if-select:focus { border-color: var(--blue); }
+        .if-media-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+        .if-media-switch { display: flex; gap: 2px; padding: 3px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+        .if-media-switch button {
+          padding: 4px 14px; font-size: 12px; font-weight: 600; font-family: inherit; border: none; border-radius: 6px;
+          color: var(--text-muted); background: none; cursor: pointer;
+        }
+        .if-media-switch button.active { background: var(--bg-surface); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+        .if-media-switch button:disabled { cursor: default; opacity: 0.6; }
+        .if-media-tip {
+          display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; padding: 9px 11px;
+          font-size: 12px; line-height: 1.5; color: var(--text-secondary);
+          background: var(--blue-dim); border: 1px solid var(--blue); border-radius: var(--radius-sm);
+        }
+        .if-media-tip > svg { color: var(--blue); flex-shrink: 0; margin-top: 2px; }
+        .if-media-tip b { color: var(--text-primary); }
+        .if-media-tip-meta { margin-top: 3px; font-size: 11px; color: var(--text-muted); }
       `}</style>
 
       {sectionKey === "carousel_items" && (
         <>
           <div>
-            <label className="if-label">Image</label>
-            <ImageUploadField
-              value={form.picture ?? ""}
-              onChange={setPicture}
-              folder="app_content/carousel"
-              disabled={loading}
-              onUploadingChange={setUploading}
-              onValidityChange={setImageValid}
-              onUploaded={(url) => uploadedRef.current.push(url)}
-              onFileChosen={(name) => setForm((prev: any) => (prev.imageName?.trim() ? prev : { ...prev, imageName: name }))}
-            />
-            <input className="if-input" style={{ marginTop: 8 }} placeholder="…or paste an image URL" value={form.picture ?? ""} onChange={(e) => setPicture(e.target.value)} disabled={loading || uploading} />
+            <div className="if-media-head">
+              <label className="if-label" style={{ marginBottom: 0 }}>Media</label>
+              <div className="if-media-switch" role="radiogroup" aria-label="Media type">
+                {(["image", "video"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    role="radio"
+                    aria-checked={mediaType === t}
+                    className={mediaType === t ? "active" : ""}
+                    onClick={() => switchMediaType(t)}
+                    disabled={loading || busy}
+                  >
+                    {t === "image" ? "Image" : "Video"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="if-media-tip">
+              <InfoIcon size={14} />
+              <div>
+                <b>Best fit: 16:9 landscape</b> — {mediaType === "image" ? "1920×1080 px" : "1920×1080 (1080p)"} recommended, or 1280×720.
+                Other shapes are cropped to fill the slide, so keep text and faces in the middle.
+                <div className="if-media-tip-meta">
+                  {mediaType === "image"
+                    ? "JPG, PNG or WebP · up to 5 MB"
+                    : "MP4 (H.264) · up to 25 MB · up to 30 seconds · plays without sound"}
+                </div>
+              </div>
+            </div>
+
+            {mediaType === "image" ? (
+              <>
+                <ImageUploadField
+                  value={form.picture ?? ""}
+                  onChange={setPicture}
+                  folder="app_content/carousel"
+                  disabled={loading}
+                  onUploadingChange={setUploading}
+                  onValidityChange={setImageValid}
+                  onUploaded={(url) => uploadedRef.current.push(url)}
+                  onFileChosen={(name) => setForm((prev: any) => (prev.imageName?.trim() ? prev : { ...prev, imageName: name }))}
+                />
+                <input className="if-input" style={{ marginTop: 8 }} placeholder="…or paste an image URL" value={form.picture ?? ""} onChange={(e) => setPicture(e.target.value)} disabled={loading || uploading} />
+              </>
+            ) : (
+              <>
+                <VideoUploadField
+                  value={form.video ?? ""}
+                  onChange={(url) => setMedia("video", url)}
+                  folder="app_content/carousel/videos"
+                  disabled={loading}
+                  onUploadingChange={setVideoUploading}
+                  onUploaded={(url) => uploadedRef.current.push(url)}
+                />
+                <div className="if-sort-hint">Plays muted in the app&apos;s home carousel, then moves to the next slide.</div>
+              </>
+            )}
             {carouselNoImage && (
               <div className="if-sort-hint" style={{ color: "var(--amber)" }}>
-                No image — this slide will be saved as hidden (sort 0). Add an image to publish it.
+                No {mediaType} — this slide will be saved as hidden (sort 0). Add {mediaType === "image" ? "an image" : "a video"} to publish it.
               </div>
             )}
           </div>
+          {(() => {
+            // How the slide will look in the app, before saving
+            const src = mediaType === "image" ? form.picture?.trim() : form.video?.trim();
+            if (!src || busy || (mediaType === "image" && !imageValid)) return null;
+            return <CarouselPreview key={`${mediaType}:${src}`} kind={mediaType} src={src} />;
+          })()}
           <div>
             <label className="if-label">Image Name *</label>
             <input className="if-input" value={form.imageName ?? ""} onChange={(e) => set("imageName", e.target.value)} disabled={loading} placeholder="Display name for this carousel item…" />
@@ -418,7 +514,7 @@ function ItemForm({
             value={form.sortNumber ?? 0}
             onChange={(e) => set("sortNumber", parseInt(e.target.value) || 0)}
             disabled={loading || carouselNoImage}
-            title={carouselNoImage ? "Add an image to publish this slide" : undefined}
+            title={carouselNoImage ? `Add ${mediaType === "image" ? "an image" : "a video"} to publish this slide` : undefined}
             style={{
               borderColor: currentSortTaken ? "var(--red)" : undefined,
             }}
@@ -440,9 +536,13 @@ function ItemForm({
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 4 }}>
         <Button variant="primary" size="sm" loading={loading} onClick={() => {
-          savedPictureRef.current = form.picture ?? null;
-          onSubmit(carouselNoImage ? { ...form, sortNumber: 0 } : form);
-        }} disabled={!canSubmit || loading || uploading}>
+          const data = sectionKey === "carousel_items"
+            ? (mediaType === "video" ? { ...form, picture: "" } : { ...form, video: "" })
+            : form;
+          savedPictureRef.current = data.picture || null;
+          savedVideoRef.current = data.video || null;
+          onSubmit(carouselNoImage ? { ...data, sortNumber: 0 } : data);
+        }} disabled={!canSubmit || loading || busy}>
           {isEdit ? "Save Changes" : "Create Item"}
         </Button>
       </div>
@@ -766,6 +866,8 @@ function SectionPanel({
       // The replaced / removed image is no longer referenced anywhere
       const oldPicture = pictureOf(editing);
       if (oldPicture && oldPicture !== pictureOf(form)) deleteOwnedImage(oldPicture);
+      const oldVideo = videoOf(editing);
+      if (oldVideo && oldVideo !== videoOf(form)) deleteOwnedImage(oldVideo);
       toast.success("Item updated");
       setEditing(null);
       onRefresh();
@@ -779,6 +881,7 @@ function SectionPanel({
     const result = await deleteItem(sectionKey, meta.label, deleting);
     if (result.success) {
       deleteOwnedImage(pictureOf(deleting));
+      deleteOwnedImage(videoOf(deleting));
       toast.success("Item deleted");
       setDeleting(null);
       // If last item on current page was deleted, go back one page
@@ -961,7 +1064,10 @@ function SectionPanel({
                     <td><Badge variant="blue">{(item as any).category || "—"}</Badge></td>
                   )}
                   <td>
-                    <div className="cm-title">{getItemTitle(item, sectionKey)}</div>
+                    <div className="cm-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {getItemTitle(item, sectionKey)}
+                      {videoOf(item) && <Badge variant="purple">Video</Badge>}
+                    </div>
                   </td>
                   <td style={{ fontFamily: "'Space Mono', monospace" }}>{item.sortNumber}</td>
                   <td>
