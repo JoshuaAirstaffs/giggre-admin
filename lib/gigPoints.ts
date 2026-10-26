@@ -33,9 +33,12 @@ export const REQUEST_TYPE_LABEL: Record<RequestType, string> = {
   to_points: "GigCash → Points",
 };
 
-/** Peso amount, e.g. ₱12.50 */
-export const fmtMoney = (n: number, ccy = "PHP") =>
-  `${ccy === "PHP" ? "₱" : `${ccy} `}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** Same rule as the app: ₱ for PHP, $ for USD and everything else. */
+export const currencySymbol = (ccy: string | null | undefined) => (ccy === "PHP" ? "₱" : "$");
+
+/** Amount in a user's wallet currency, e.g. $12.50 / ₱12.50 (default USD). */
+export const fmtMoney = (n: number, ccy = "USD") =>
+  `${currencySymbol(ccy)}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export const GIG_TYPES = [
   { key: "quick",   label: "Quick Gig",   hint: "Instant gigs matched on the spot (quick_gigs)" },
@@ -52,6 +55,8 @@ export interface PointsRequest {
   cash: number;
   currencyCode: string;
   rate: number | null;
+  /** Wallet units per US$1 locked on the request (1 for USD wallets). */
+  fxRate: number | null;
   status: RequestStatus;
   points: number;
   note: string | null;
@@ -78,8 +83,9 @@ export function parseRequest(id: string, d: Record<string, unknown>): PointsRequ
     type: (REQUEST_TYPES as readonly string[]).includes(d.type as string) ? (d.type as RequestType) : null,
     legacyType: (REQUEST_TYPES as readonly string[]).includes(d.type as string) ? null : s(d.type),
     cash: typeof d.cash === "number" ? d.cash : 0,
-    currencyCode: s(d.currencyCode) ?? "PHP",
+    currencyCode: s(d.currencyCode) ?? "USD",
     rate: typeof d.rate === "number" ? d.rate : null,
+    fxRate: typeof d.fxRate === "number" ? d.fxRate : null,
     status: (d.status as RequestStatus) ?? "pending",
     points: typeof d.points === "number" ? d.points : 0,
     note: s(d.note),
@@ -126,7 +132,8 @@ export function parseRewardConfig(d: Record<string, unknown> | undefined): Rewar
 export interface TypeLimits { enabled: boolean; min: number | null; max: number | null; dailyMax: number | null }
 export interface ConversionConfig {
   enabled: boolean;
-  /** Points per ₱1 — toCash when cashing out, toPoints when buying points. */
+  /** Points per US$1 — toCash when cashing out, toPoints when buying points.
+   *  Peso wallets are converted at the live rate (general_config/fx_rates). */
   rates: { toCash: number | null; toPoints: number | null };
   toCash: TypeLimits;
   toPoints: TypeLimits;

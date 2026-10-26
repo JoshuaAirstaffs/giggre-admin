@@ -11,12 +11,12 @@ interface CurrencyContextValue {
 }
 
 const CurrencyContext = createContext<CurrencyContextValue>({
-  symbol: "₱",
+  symbol: "$",
   setSymbol: () => {},
 });
 
 export function CurrencyProvider({ children }: { children: ReactNode }) {
-  const [symbol, setSymbol] = useState<CurrencySymbol>("₱");
+  const [symbol, setSymbol] = useState<CurrencySymbol>("$");
 
   useEffect(() => {
     getDoc(doc(db, "general_config", "currency"))

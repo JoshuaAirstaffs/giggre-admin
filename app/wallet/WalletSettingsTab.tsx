@@ -7,6 +7,8 @@ import Button from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toaster";
 import type { AdminUser } from "@/context/AuthContext";
 import { writeLog } from "@/lib/activitylog";
+import { useFx, phpHint } from "@/lib/fx";
+import FxCard from "./FxCard";
 import {
   WALLET_CONFIG_DOC, WALLET_TYPES, WALLET_TYPE_LABEL, parseWalletConfig, fmtMoney, DEPOSIT_KINDS, DEPOSIT_FIELDS,
   type AmountLimits, type DepositAccount, type DepositKind, type WalletConfig, type WalletType,
@@ -32,6 +34,7 @@ const amt = (v: string) => (v.trim() === "" ? null : /^\d+(\.\d{1,2})?$/.test(v.
 const lim = (v: number | null) => (v == null ? "no limit" : fmtMoney(v));
 
 export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; canEdit: boolean }) {
+  const fx = useFx();
   const [saved, setSaved] = useState<WalletConfig>(parseWalletConfig(undefined));
   const [exists, setExists] = useState(false);
   const [draft, setDraft] = useState<Draft>(toDraft(saved));
@@ -55,7 +58,7 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
   const errs = Object.fromEntries(WALLET_TYPES.map((t) => {
     const x = parsed[t];
     let e: string | null = null;
-    if ([x.min, x.max, x.dailyMax].some((v) => Number.isNaN(v))) e = "Use amounts above ₱0 with up to 2 decimals, or leave empty for no limit.";
+    if ([x.min, x.max, x.dailyMax].some((v) => Number.isNaN(v))) e = "Use amounts above 0 with up to 2 decimals, or leave empty for no limit.";
     else if (x.min != null && x.max != null && x.min > x.max) e = "Minimum can't be more than the maximum.";
     return [t, e];
   })) as Record<WalletType, string | null>;
@@ -111,6 +114,7 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
   return (
     <>
       {!canEdit && <div className="gp-readonly"><Lock size={13} /> Only super admins can change wallet settings.</div>}
+      <FxCard user={user} canEdit={canEdit} />
       <div className="gp-card" style={{ marginBottom: 16 }}>
         <div className="gp-head">
           <div>
@@ -139,9 +143,10 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
               <div className="gp-row">
                 {(["min", "max", "dailyMax"] as const).map((k) => (
                   <div key={k}>
-                    <label className="gp-label">{k === "min" ? "Min (₱)" : k === "max" ? "Max (₱)" : "Daily cap / user (₱)"}</label>
+                    <label className="gp-label">{k === "min" ? "Min (USD)" : k === "max" ? "Max (USD)" : "Daily cap / user (USD)"}</label>
                     <input className="gp-input" type="number" min={0.01} step="0.01" inputMode="decimal" placeholder="No limit"
                       value={d[k]} disabled={disabled} onChange={(e) => setT(t, k, e.target.value)} />
+                    <div className="gp-sub" style={{ marginTop: 3 }}>{phpHint(parsed[t][k], fx)}</div>
                   </div>
                 ))}
               </div>
@@ -224,7 +229,8 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
       </div>
 
       <div className="gp-note" style={{ marginBottom: 14 }}>
-        Each user can have only one wallet request waiting for review at a time. The daily cap counts everything a user requested of that
+        Limits are in US dollars; users in the Philippines get them in pesos at the exchange rate above. Each user can have only one
+        wallet request waiting for review at a time. The daily cap counts everything a user requested of that
         type on the same day (Philippine time), whether pending or approved. Only verified accounts can Send.
         {!exists && " These settings haven't been saved yet, so wallet requests are closed until you save."}
       </div>

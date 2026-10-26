@@ -111,6 +111,9 @@ export default function WalletRequestsTab() {
                       {r.type === "transfer" && (
                         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                           <ArrowRight size={12} /> {r.recipientName} <span className="gp-sub">{r.recipientCode}</span>
+                          {r.recipientCurrency && r.recipientCurrency !== r.currencyCode && r.recipientAmount != null && (
+                            <span className="gp-sub">· gets {fmtMoney(r.recipientAmount, r.recipientCurrency)}</span>
+                          )}
                         </div>
                       )}
                       {r.note && <div className="gp-sub" style={{ whiteSpace: "pre-wrap" }}>“{r.note}”</div>}
@@ -186,6 +189,9 @@ function DecisionModal({ req, decision, onClose }: { req: WalletRequest; decisio
           {req.type === "deposit" && <><dt>Paid via</dt><dd>{req.method ?? "Manual"}</dd><dt>{refLabel(req.methodKind)}</dt><dd>{req.reference ?? "—"}</dd></>}
           {req.proofUrl && <><dt>Proof</dt><dd><a href={req.proofUrl} target="_blank" rel="noreferrer" style={{ color: "var(--blue)" }}>Open screenshot</a></dd></>}
           {req.type === "transfer" && <><dt>To</dt><dd>{req.recipientName} {req.recipientCode && <span className="gp-sub">({req.recipientCode})</span>}</dd></>}
+          {req.type === "transfer" && req.recipientCurrency && req.recipientCurrency !== req.currencyCode && req.recipientAmount != null && (
+            <><dt>They get</dt><dd className="gp-pts">{fmtMoney(req.recipientAmount, req.recipientCurrency)} <span className="gp-sub">(converted at request)</span></dd></>
+          )}
           {req.note && <><dt>User note</dt><dd style={{ whiteSpace: "pre-wrap" }}>{req.note}</dd></>}
           <dt>GigCash</dt><dd>{bal == null ? "…" : fmtMoney(bal, req.currencyCode)}</dd>
         </dl>

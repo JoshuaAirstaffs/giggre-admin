@@ -10,7 +10,7 @@ import Modal from "@/components/ui/Modal";
 import { toast } from "@/components/ui/Toaster";
 import type { AdminUser } from "@/context/AuthContext";
 import {
-  REQUEST_TYPES, REQUEST_TYPE_LABEL, parseRequest, decideGigPointsRequest, callableError, fmtMoney,
+  REQUEST_TYPES, REQUEST_TYPE_LABEL, parseRequest, decideGigPointsRequest, callableError, fmtMoney, currencySymbol,
   type PointsRequest, type RequestStatus, type RequestType,
 } from "@/lib/gigPoints";
 
@@ -116,7 +116,7 @@ export default function RequestsTab({ user }: { user: AdminUser }) {
                           <span className={`gp-pts ${r.type === "to_cash" ? "plus" : "minus"}`}>
                             {r.type === "to_cash" ? "+" : "−"}{fmtMoney(r.cash, r.currencyCode)}
                           </span>
-                          {r.rate != null && <div className="gp-sub">{n(r.rate)} pts / ₱1</div>}
+                          {r.rate != null && <div className="gp-sub">{n(r.rate)} pts / $1{r.fxRate && r.currencyCode !== "USD" ? ` · $1 = ${currencySymbol(r.currencyCode)}${r.fxRate}` : ""}</div>}
                         </>
                       ) : <span className="gp-sub">—</span>}
                     </td>
@@ -204,7 +204,7 @@ function DecisionModal({ req, decision, onClose }: { req: PointsRequest; decisio
           <dt>Conversion</dt><dd>{typeLabel(req)}</dd>
           <dt>Points</dt><dd className="gp-pts">{n(req.points)}</dd>
           {req.type && <><dt>GigCash</dt><dd className="gp-pts">{fmtMoney(req.cash, req.currencyCode)}</dd></>}
-          {req.rate != null && <><dt>Rate</dt><dd>{n(req.rate)} points per ₱1 (locked when requested)</dd></>}
+          {req.rate != null && <><dt>Rate</dt><dd>{n(req.rate)} points per $1{req.fxRate && req.currencyCode !== "USD" ? `, 1 USD = ${req.fxRate} ${req.currencyCode}` : ""} (locked when requested)</dd></>}
           {req.note && <><dt>User note</dt><dd style={{ whiteSpace: "pre-wrap" }}>{req.note}</dd></>}
           <dt>Balance</dt><dd>{bal ? `${n(bal.balance)} available · ${n(bal.held)} on hold` : "…"}</dd>
         </dl>

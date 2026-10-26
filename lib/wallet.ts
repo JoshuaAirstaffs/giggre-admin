@@ -41,6 +41,9 @@ export interface WalletRequest {
   recipientId: string | null;
   recipientName: string | null;
   recipientCode: string | null;
+  /** What the recipient gets, in their wallet currency (Send). */
+  recipientAmount: number | null;
+  recipientCurrency: string | null;
   createdAt: Date | null;
   decidedAt: Date | null;
   decidedByName: string | null;
@@ -56,10 +59,12 @@ export function parseWalletRequest(id: string, d: Record<string, unknown>): Wall
     type: d.type === "transfer" ? "transfer" : "deposit",
     status: (d.status as WalletStatus) ?? "pending",
     amount: typeof d.amount === "number" ? d.amount : 0,
-    currencyCode: s(d.currencyCode) ?? "PHP",
+    currencyCode: s(d.currencyCode) ?? "USD",
     note: s(d.note), method: s(d.method), methodKind: s(d.methodKind), reference: s(d.reference), proofUrl: s(d.proofUrl),
     userId: s(d.userId) ?? "", userName: s(d.userName) ?? "Giggre user", userCode: s(d.userCode),
     recipientId: s(d.recipientId), recipientName: s(d.recipientName), recipientCode: s(d.recipientCode),
+    recipientAmount: typeof d.recipientAmount === "number" ? d.recipientAmount : null,
+    recipientCurrency: s(d.recipientCurrency),
     createdAt: toDate(d.createdAt), decidedAt: toDate(d.decidedAt),
     decidedByName: s(d.decidedByName), decisionNote: s(d.decisionNote),
   };

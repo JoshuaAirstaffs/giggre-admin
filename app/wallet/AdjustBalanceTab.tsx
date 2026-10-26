@@ -6,6 +6,7 @@ import Button from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/Modal";
 import { toast } from "@/components/ui/Toaster";
 import { callableError } from "@/lib/gigPoints";
+import { currencySymbol } from "@/lib/gigPoints";
 import { adminAdjustWallet, adminFindWalletUser, fmtMoney, newRequestId, type FoundWalletUser } from "@/lib/wallet";
 
 type Mode = "add" | "remove";
@@ -39,7 +40,7 @@ export default function AdjustBalanceTab() {
   const validAmt = /^\d+(\.\d{1,2})?$/.test(amount.trim()) && amt > 0 && amt <= 100_000;
   const short = mode === "remove" && user && validAmt && amt > user.walletBalance;
   const ready = !!user && validAmt && !short && reason.trim().length >= 3;
-  const ccy = user?.currencyCode ?? "PHP";
+  const ccy = user?.currencyCode ?? "USD";
 
   const run = async () => {
     if (!user) return;
@@ -102,10 +103,10 @@ export default function AdjustBalanceTab() {
       </div>
 
       <div>
-        <label className="gp-label">Amount (₱)</label>
+        <label className="gp-label">Amount ({currencySymbol(ccy)}){user ? ` — ${user.name}'s wallet is in ${ccy}` : ""}</label>
         <input className="gp-input" type="number" min={0.01} step="0.01" inputMode="decimal" style={{ maxWidth: 220 }}
           value={amount} onChange={(e) => setAmount(e.target.value)} />
-        {amount.trim() !== "" && !validAmt && <div className="gp-error" style={{ marginTop: 6 }}>Enter an amount from ₱0.01 to ₱100,000 (up to 2 decimals).</div>}
+        {amount.trim() !== "" && !validAmt && <div className="gp-error" style={{ marginTop: 6 }}>Enter an amount from {fmtMoney(0.01, ccy)} to {fmtMoney(100000, ccy)} (up to 2 decimals).</div>}
         {short && <div className="gp-error" style={{ marginTop: 6 }}>{user!.name} only has {fmtMoney(user!.walletBalance, ccy)}.</div>}
       </div>
       <div>

@@ -7,6 +7,7 @@ import Button from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toaster";
 import type { AdminUser } from "@/context/AuthContext";
 import { writeLog } from "@/lib/activitylog";
+import { useFx } from "@/lib/fx";
 import {
   GIG_POINTS_LIMITS_DOC, REQUEST_TYPES, REQUEST_TYPE_LABEL, DIRECTION_KEY, parseConversion, fmtMoney,
   type ConversionConfig, type RequestType, type TypeLimits,
@@ -16,9 +17,14 @@ const HINTS: Record<RequestType, string> = {
   to_cash: "User turns points into GigCash in their Gig Wallet. The points are held until you decide.",
   to_points: "User spends GigCash to get points. The GigCash is taken from the wallet when requested and refunded if you reject it.",
 };
-const RATE_HINT: Record<RequestType, (r: number) => string> = {
-  to_cash: (r) => `${r.toLocaleString()} points → ${fmtMoney(1)}  ·  1,000 points → ${fmtMoney(Math.floor((1000 / r) * 100) / 100)}`,
-  to_points: (r) => `${fmtMoney(1)} → ${r.toLocaleString()} points  ·  ${fmtMoney(100)} → ${(100 * r).toLocaleString()} points`,
+/** Rates are points per US$1; PH users are converted at the live rate. */
+const RATE_HINT: Record<RequestType, (r: number, php: number | null) => string> = {
+  to_cash: (r, php) =>
+    `${r.toLocaleString()} points → ${fmtMoney(1)}${php ? ` (${fmtMoney(php, "PHP")})` : ""}  ·  ` +
+    `1,000 points → ${fmtMoney(Math.floor((1000 / r) * 100) / 100)}${php ? ` (${fmtMoney(Math.floor((1000 / r) * php * 100) / 100, "PHP")})` : ""}`,
+  to_points: (r, php) =>
+    `${fmtMoney(1)}${php ? ` (${fmtMoney(php, "PHP")})` : ""} → ${r.toLocaleString()} points` +
+    (php ? `  ·  ${fmtMoney(100, "PHP")} → ${Math.floor((100 / php) * r).toLocaleString()} points` : ""),
 };
 
 type TDraft = { enabled: boolean; rate: string; min: string; max: string; dailyMax: string };
@@ -36,6 +42,7 @@ const p = (v: string) => (v.trim() === "" ? null : /^\d+$/.test(v.trim()) && Num
 const lim = (v: number | null) => (v == null ? "no limit" : v.toLocaleString());
 
 export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit: boolean }) {
+  const fx = useFx();
   const [saved, setSaved] = useState<ConversionConfig>(parseConversion(undefined));
   const [exists, setExists] = useState(false);
   const [draft, setDraft] = useState<Draft>(toDraft(saved));
@@ -70,7 +77,7 @@ export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit:
     if (x.dailyMax != null && x.min != null && x.dailyMax < x.min) return "The daily cap is below the minimum, so no request can be made.";
     const cash = parsed.to_cash.rate, buy = parsed.to_points.rate;
     if (t === "to_points" && cash && buy && buy > cash) {
-      return `Buying gives more points per ₱1 than cashing out takes (${buy} vs ${cash}), so users can profit by converting back and forth.`;
+      return `Buying gives more points per $1 than cashing out takes (${buy} vs ${cash}), so users can profit by converting back and forth.`;
     }
     return null;
   };
@@ -94,7 +101,7 @@ export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit:
       await setDoc(GIG_POINTS_LIMITS_DOC, { ...next, updatedAt: serverTimestamp(), updatedBy: user.uid });
       const describe = REQUEST_TYPES.map((t) => {
         const k = DIRECTION_KEY[t];
-        return `${REQUEST_TYPE_LABEL[t]} ${next[k].enabled ? `on at ${next.rates[k]} pts/₱1 (min ${lim(next[k].min)}, max ${lim(next[k].max)}, daily ${lim(next[k].dailyMax)})` : "off"}`;
+        return `${REQUEST_TYPE_LABEL[t]} ${next[k].enabled ? `on at ${next.rates[k]} pts/$1 (min ${lim(next[k].min)}, max ${lim(next[k].max)}, daily ${lim(next[k].dailyMax)})` : "off"}`;
       }).join(" · ");
       await writeLog({
         actorId: user.uid, actorName: user.displayName ?? user.email ?? "Unknown", actorEmail: user.email ?? undefined,
@@ -153,10 +160,10 @@ export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit:
                 </label>
               </div>
               <div>
-                <label className="gp-label">Rate — points per ₱1</label>
+                <label className="gp-label">Rate — points per US$1</label>
                 <input className="gp-input" type="number" min={1} step={1} inputMode="numeric" placeholder={t === "to_cash" ? "e.g. 100" : "e.g. 80"}
                   value={d.rate} disabled={disabled} onChange={(e) => setT(t, "rate", e.target.value)} style={{ maxWidth: 220 }} />
-                {rate != null && !Number.isNaN(rate) && <div className="gp-note" style={{ marginTop: 6 }}>{RATE_HINT[t](rate)}</div>}
+                {rate != null && !Number.isNaN(rate) && <div className="gp-note" style={{ marginTop: 6 }}>{RATE_HINT[t](rate, fx.php)}</div>}
               </div>
               <div className="gp-row">
                 {(["min", "max", "dailyMax"] as const).map((k) => (
@@ -175,7 +182,9 @@ export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit:
       </div>
 
       <div className="gp-note" style={{ marginBottom: 14 }}>
-        All limits are in points. Cashing out rounds the peso amount down to the centavo; buying rounds the cost up. The rate is locked onto
+        Rates are points per US dollar; users in the Philippines are converted to pesos at the live exchange rate
+        {fx.php ? ` (now 1 USD = ${fx.php.toFixed(2)} PHP, set on Gig Wallet → Settings)` : " (Gig Wallet → Settings)"}, and each
+        request keeps the rates it was made at. All limits are in points. Cashing out rounds the peso amount down to the centavo; buying rounds the cost up. The rate is locked onto
         each request when it&apos;s made. The daily cap counts everything a user converted in that direction on the same day (Philippine time),
         whether pending or approved; rejected and cancelled requests don&apos;t count. Each user can have only one request waiting for review
         at a time. {!exists && "These settings haven't been saved yet, so conversion is closed until you save."}
