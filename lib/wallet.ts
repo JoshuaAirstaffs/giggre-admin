@@ -20,6 +20,9 @@ export const WALLET_TYPES = ["deposit", "transfer"] as const;
 export type WalletType = (typeof WALLET_TYPES)[number];
 export type WalletStatus = "pending" | "approved" | "rejected" | "cancelled";
 export const WALLET_TYPE_LABEL: Record<WalletType, string> = { deposit: "Top up", transfer: "Send" };
+/** What the proof number is called for each top-up method. */
+export const refLabel = (kind: string | null) =>
+  kind === "office" ? "OR no." : kind === "remittance" ? "Control no." : "Ref";
 
 export interface WalletRequest {
   id: string;
@@ -29,6 +32,7 @@ export interface WalletRequest {
   currencyCode: string;
   note: string | null;
   method: string | null;
+  methodKind: string | null;
   reference: string | null;
   proofUrl: string | null;
   userId: string;
@@ -53,7 +57,7 @@ export function parseWalletRequest(id: string, d: Record<string, unknown>): Wall
     status: (d.status as WalletStatus) ?? "pending",
     amount: typeof d.amount === "number" ? d.amount : 0,
     currencyCode: s(d.currencyCode) ?? "PHP",
-    note: s(d.note), method: s(d.method), reference: s(d.reference), proofUrl: s(d.proofUrl),
+    note: s(d.note), method: s(d.method), methodKind: s(d.methodKind), reference: s(d.reference), proofUrl: s(d.proofUrl),
     userId: s(d.userId) ?? "", userName: s(d.userName) ?? "Giggre user", userCode: s(d.userCode),
     recipientId: s(d.recipientId), recipientName: s(d.recipientName), recipientCode: s(d.recipientCode),
     createdAt: toDate(d.createdAt), decidedAt: toDate(d.decidedAt),
@@ -64,7 +68,35 @@ export function parseWalletRequest(id: string, d: Record<string, unknown>): Wall
 // ── Config ────────────────────────────────────────────────────────────────────
 
 export interface AmountLimits { enabled: boolean; min: number | null; max: number | null; dailyMax: number | null }
-export interface DepositAccount { method: string; accountName: string; accountNumber: string }
+/** How a top up is paid. "ewallet" covers GCash / Maya / bank transfer. */
+export type DepositKind = "ewallet" | "office" | "remittance";
+export const DEPOSIT_KINDS: { key: DepositKind; label: string }[] = [
+  { key: "ewallet", label: "E-wallet / bank" },
+  { key: "office", label: "Cash at office" },
+  { key: "remittance", label: "Remittance center" },
+];
+/** Field labels per kind — the app shows the same wording. */
+export const DEPOSIT_FIELDS: Record<DepositKind, { method: string; methodHint: string; name: string; nameHint: string; number: string; numberHint: string; details: string; detailsHint: string }> = {
+  ewallet: {
+    method: "Method", methodHint: "GCash",
+    name: "Account name", nameHint: "Airstaffs Inc.",
+    number: "Account number", numberHint: "0917 123 4567",
+    details: "Extra details (optional)", detailsHint: "",
+  },
+  office: {
+    method: "Label", methodHint: "Cash at office",
+    name: "Office name", nameHint: "Giggre Makati Office",
+    number: "Address", numberHint: "12F Example Tower, Ayala Ave., Makati",
+    details: "Hours & instructions", detailsHint: "Mon–Fri 9am–5pm. Ask the cashier for an official receipt.",
+  },
+  remittance: {
+    method: "Label", methodHint: "Remittance center",
+    name: "Receiver full name", nameHint: "Juan Dela Cruz",
+    number: "Receiver mobile no.", numberHint: "0917 123 4567",
+    details: "Receiver address & accepted centers", detailsHint: "Makati City. Palawan Express, Cebuana, M Lhuillier.",
+  },
+};
+export interface DepositAccount { kind: DepositKind; method: string; accountName: string; accountNumber: string; details: string }
 export interface WalletConfig {
   enabled: boolean;
   deposit: AmountLimits;
@@ -85,7 +117,11 @@ export function parseWalletConfig(d: Record<string, unknown> | undefined): Walle
     enabled: !!d && d.enabled !== false,
     deposit: t("deposit"),
     transfer: t("transfer"),
-    depositAccounts: accounts.map((a) => ({ method: s(a?.method) ?? "", accountName: s(a?.accountName) ?? "", accountNumber: s(a?.accountNumber) ?? "" })),
+    depositAccounts: accounts.map((a) => ({
+      kind: (a?.kind === "office" || a?.kind === "remittance" ? a.kind : "ewallet") as DepositKind,
+      method: s(a?.method) ?? "", accountName: s(a?.accountName) ?? "",
+      accountNumber: s(a?.accountNumber) ?? "", details: s(a?.details) ?? "",
+    })),
     depositNote: s(d?.depositNote) ?? "",
   };
 }

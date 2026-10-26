@@ -10,7 +10,7 @@ import Modal from "@/components/ui/Modal";
 import { toast } from "@/components/ui/Toaster";
 import { callableError } from "@/lib/gigPoints";
 import {
-  WALLET_TYPES, WALLET_TYPE_LABEL, parseWalletRequest, decideWalletRequest, fmtMoney,
+  WALLET_TYPES, WALLET_TYPE_LABEL, parseWalletRequest, decideWalletRequest, fmtMoney, refLabel,
   type WalletRequest, type WalletStatus, type WalletType,
 } from "@/lib/wallet";
 
@@ -100,7 +100,7 @@ export default function WalletRequestsTab() {
                     <td style={{ maxWidth: 300 }}>
                       {r.type === "deposit" && (
                         <div>
-                          {r.method ?? "Manual"} · Ref <b>{r.reference ?? "—"}</b>
+                          {r.method ?? "Manual"} · {refLabel(r.methodKind)} <b>{r.reference ?? "—"}</b>
                           {r.proofUrl && (
                             <a href={r.proofUrl} target="_blank" rel="noreferrer" style={{ marginLeft: 6, color: "var(--blue)", display: "inline-flex", alignItems: "center", gap: 3 }}>
                               Proof <ExternalLink size={11} />
@@ -183,7 +183,7 @@ function DecisionModal({ req, decision, onClose }: { req: WalletRequest; decisio
           <dt>User</dt><dd>{req.userName} {req.userCode && <span className="gp-sub">({req.userCode})</span>}</dd>
           <dt>Type</dt><dd>{WALLET_TYPE_LABEL[req.type]}</dd>
           <dt>Amount</dt><dd className="gp-pts">{amt}</dd>
-          {req.type === "deposit" && <><dt>Paid via</dt><dd>{req.method ?? "Manual"}</dd><dt>Reference</dt><dd>{req.reference ?? "—"}</dd></>}
+          {req.type === "deposit" && <><dt>Paid via</dt><dd>{req.method ?? "Manual"}</dd><dt>{refLabel(req.methodKind)}</dt><dd>{req.reference ?? "—"}</dd></>}
           {req.proofUrl && <><dt>Proof</dt><dd><a href={req.proofUrl} target="_blank" rel="noreferrer" style={{ color: "var(--blue)" }}>Open screenshot</a></dd></>}
           {req.type === "transfer" && <><dt>To</dt><dd>{req.recipientName} {req.recipientCode && <span className="gp-sub">({req.recipientCode})</span>}</dd></>}
           {req.note && <><dt>User note</dt><dd style={{ whiteSpace: "pre-wrap" }}>{req.note}</dd></>}
@@ -192,7 +192,7 @@ function DecisionModal({ req, decision, onClose }: { req: WalletRequest; decisio
         <div className="gp-note">
           {approve
             ? req.type === "deposit"
-              ? `${amt} will be added to ${req.userName}'s Gig Wallet. Only approve after you've confirmed the payment with reference ${req.reference ?? "—"} arrived.`
+              ? `${amt} will be added to ${req.userName}'s Gig Wallet. ${req.methodKind === "office" ? `Only approve after checking the cash was received with ${refLabel(req.methodKind)} ${req.reference ?? "—"}.` : req.methodKind === "remittance" ? `Only approve after you've claimed the remittance with ${refLabel(req.methodKind)} ${req.reference ?? "—"}.` : `Only approve after you've confirmed the payment with reference ${req.reference ?? "—"} arrived.`}`
               : `The ${amt} already on hold will be sent to ${req.recipientName ?? "the recipient"}.`
             : `${req.userName} will be told why.${req.type === "transfer" ? ` ${amt} is refunded to their Gig Wallet.` : ""}`}
         </div>

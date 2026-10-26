@@ -8,12 +8,12 @@ import { toast } from "@/components/ui/Toaster";
 import type { AdminUser } from "@/context/AuthContext";
 import { writeLog } from "@/lib/activitylog";
 import {
-  WALLET_CONFIG_DOC, WALLET_TYPES, WALLET_TYPE_LABEL, parseWalletConfig, fmtMoney,
-  type AmountLimits, type DepositAccount, type WalletConfig, type WalletType,
+  WALLET_CONFIG_DOC, WALLET_TYPES, WALLET_TYPE_LABEL, parseWalletConfig, fmtMoney, DEPOSIT_KINDS, DEPOSIT_FIELDS,
+  type AmountLimits, type DepositAccount, type DepositKind, type WalletConfig, type WalletType,
 } from "@/lib/wallet";
 
 const HINTS: Record<WalletType, string> = {
-  deposit: "User pays one of the accounts below outside the app, then submits the reference number (and an optional screenshot). Nothing is held.",
+  deposit: "User pays one of the top-up methods below (e-wallet, cash at the office or a remittance center), then submits the reference / receipt / control number and an optional photo. Nothing is held.",
   transfer: "Verified users send GigCash to another user. The amount is taken from the sender when requested and refunded if you reject it.",
 };
 
@@ -75,7 +75,10 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
       deposit: parsed.deposit,
       transfer: parsed.transfer,
       withdraw: { enabled: false, min: null, max: null, dailyMax: null },
-      depositAccounts: draft.accounts.map((a) => ({ method: a.method.trim(), accountName: a.accountName.trim(), accountNumber: a.accountNumber.trim() })),
+      depositAccounts: draft.accounts.map((a) => ({
+        kind: a.kind, method: a.method.trim(), accountName: a.accountName.trim(),
+        accountNumber: a.accountNumber.trim(), details: a.details.trim(),
+      })),
       depositNote: draft.note.trim(),
     };
     setSaving(true);
@@ -150,37 +153,68 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
 
       <div className="gp-card" style={{ marginBottom: 16 }}>
         <div>
-          <div className="gp-title">Top-up accounts</div>
-          <div className="gp-hint">Shown to users on the Top Up screen. They pay one of these, then send you the reference number. Up to 5.</div>
-        </div>
-        {draft.accounts.map((a, i) => (
-          <div key={i} className="gp-row" style={{ gridTemplateColumns: "1fr 1.4fr 1.4fr auto", alignItems: "end" }}>
-            <div>
-              <label className="gp-label">Method</label>
-              <input className="gp-input" placeholder="GCash" value={a.method} disabled={disabled} onChange={(e) => setA(i, "method", e.target.value)} maxLength={40} />
-            </div>
-            <div>
-              <label className="gp-label">Account name</label>
-              <input className="gp-input" placeholder="Airstaffs Inc." value={a.accountName} disabled={disabled} onChange={(e) => setA(i, "accountName", e.target.value)} maxLength={80} />
-            </div>
-            <div>
-              <label className="gp-label">Account number</label>
-              <input className="gp-input" placeholder="0917 123 4567" value={a.accountNumber} disabled={disabled} onChange={(e) => setA(i, "accountNumber", e.target.value)} maxLength={40} />
-            </div>
-            <Button size="sm" variant="ghost" icon={Trash2} disabled={disabled}
-              onClick={() => setDraft((d) => ({ ...d, accounts: d.accounts.filter((_, j) => j !== i) }))}>Remove</Button>
+          <div className="gp-title">Top-up methods</div>
+          <div className="gp-hint">
+            Shown to users when they top up. They pay using one of these, then send you the reference number (e-wallet), the
+            official receipt number (cash at office) or the control number (remittance). Up to 5.
           </div>
-        ))}
+        </div>
+        {draft.accounts.map((a, i) => {
+          const f = DEPOSIT_FIELDS[a.kind];
+          return (
+            <div key={i} style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div className="gp-row" style={{ gridTemplateColumns: "1fr 1fr auto", alignItems: "end" }}>
+                <div>
+                  <label className="gp-label">Type</label>
+                  <select className="gp-select" value={a.kind} disabled={disabled}
+                    onChange={(e) => {
+                      const kind = e.target.value as DepositKind;
+                      setDraft((d) => ({ ...d, accounts: d.accounts.map((x, j) => (j === i
+                        ? { ...x, kind, method: kind === "ewallet" ? (x.kind === "ewallet" ? x.method : "GCash") : DEPOSIT_FIELDS[kind].methodHint }
+                        : x)) }));
+                    }}>
+                    {DEPOSIT_KINDS.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="gp-label">{f.method}</label>
+                  <input className="gp-input" placeholder={f.methodHint} value={a.method} disabled={disabled} onChange={(e) => setA(i, "method", e.target.value)} maxLength={40} />
+                </div>
+                <Button size="sm" variant="ghost" icon={Trash2} disabled={disabled}
+                  onClick={() => setDraft((d) => ({ ...d, accounts: d.accounts.filter((_, j) => j !== i) }))}>Remove</Button>
+              </div>
+              <div className="gp-row" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                <div>
+                  <label className="gp-label">{f.name}</label>
+                  <input className="gp-input" placeholder={f.nameHint} value={a.accountName} disabled={disabled} onChange={(e) => setA(i, "accountName", e.target.value)} maxLength={80} />
+                </div>
+                <div>
+                  <label className="gp-label">{f.number}</label>
+                  <input className="gp-input" placeholder={f.numberHint} value={a.accountNumber} disabled={disabled} onChange={(e) => setA(i, "accountNumber", e.target.value)} maxLength={120} />
+                </div>
+              </div>
+              <div>
+                <label className="gp-label">{f.details}</label>
+                <input className="gp-input" placeholder={f.detailsHint} value={a.details} disabled={disabled} onChange={(e) => setA(i, "details", e.target.value)} maxLength={200} />
+              </div>
+            </div>
+          );
+        })}
         {draft.accounts.length < 5 && (
-          <div>
-            <Button size="sm" variant="secondary" icon={Plus} disabled={disabled}
-              onClick={() => setDraft((d) => ({ ...d, accounts: [...d.accounts, { method: "GCash", accountName: "", accountNumber: "" }] }))}>
-              Add account
-            </Button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {DEPOSIT_KINDS.map((k) => (
+              <Button key={k.key} size="sm" variant="secondary" icon={Plus} disabled={disabled}
+                onClick={() => setDraft((d) => ({ ...d, accounts: [...d.accounts, {
+                  kind: k.key, method: k.key === "ewallet" ? "GCash" : DEPOSIT_FIELDS[k.key].methodHint,
+                  accountName: "", accountNumber: "", details: "",
+                }] }))}>
+                Add {k.label.toLowerCase()}
+              </Button>
+            ))}
           </div>
         )}
-        {!accountsOk && <div className="gp-error"><AlertCircle size={14} />Fill in method, name and number for every account.</div>}
-        {depositNoAccounts && <div className="gp-error"><AlertCircle size={14} />Add at least one account while Top up is on.</div>}
+        {!accountsOk && <div className="gp-error"><AlertCircle size={14} />Fill in the label, name and number / address for every method.</div>}
+        {depositNoAccounts && <div className="gp-error"><AlertCircle size={14} />Add at least one top-up method while Top up is on.</div>}
         <div>
           <label className="gp-label">Instructions for users (optional)</label>
           <textarea className="gp-textarea" maxLength={500} value={draft.note} disabled={disabled}
