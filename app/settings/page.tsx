@@ -20,6 +20,7 @@ import {
   DollarSign,
 } from "lucide-react";
 import { useCurrency, type CurrencySymbol } from "@/context/CurrencyContext";
+import UnverifiedLimitCard from "./UnverifiedLimitCard";
 
 // ─── Firestore doc refs ───────────────────────────────────────────────────────
 
@@ -96,7 +97,7 @@ const D_EXPIRY: GigExpiryConfig = {
   offered_gigs: 480,
 };
 
-const D_CURR: CurrencyConfig = { symbol: "₱" };
+const D_CURR: CurrencyConfig = { symbol: "$" };
 
 const D_VIS: VisibilityConfig = {
   autoHideEnabled: false,
@@ -416,6 +417,9 @@ export default function SettingsPage() {
               <SaveBtn onClick={() => save(DOCS.gigVisibility, vis, "Gig Visibility Rules", setSavingVis)} saving={savingVis} />
             </SectionCard>
           </div>
+
+          {/* ── Unverified account limit ───────────────────────────────────── */}
+          {user && <UnverifiedLimitCard user={user} canEdit={isSuperAdmin} />}
 
           {/* ── 4. Gig Expiry ───────────────────────────────────────────────── */}
           <SectionCard icon={<Timer size={15} />} title="Gig Auto-Expiry" accent="var(--purple, #a855f7)">
