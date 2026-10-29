@@ -25,6 +25,8 @@ import { AboutGiggrePanel } from "@/components/ui/content/AboutGiggrePanel";
 import { ImageUploadField } from "@/components/ui/content/ImageUploadField";
 import { VideoUploadField } from "@/components/ui/content/VideoUploadField";
 import { CarouselPreview } from "@/components/ui/content/CarouselPreview";
+import { slideCountries, coversAllCountries } from "@/lib/carouselCountries";
+import { CountrySummary, CountryPickerModal } from "@/components/ui/content/CountryPicker";
 import { deleteOwnedImage } from "@/lib/storageCleanup";
 import type { ContentSectionKey } from "@/lib/activitylog";
 import {
@@ -353,9 +355,12 @@ function ItemForm({
     setMedia(t === "video" ? "picture" : "video", "");
   };
 
+  const countries: string[] = sectionKey === "carousel_items" ? slideCountries(form) : [];
+  const [countryPickerOpen, setCountryPickerOpen] = useState(false);
+
   const canSubmit =
     sectionKey === "carousel_items"
-      ? !!form.imageName?.trim() && !currentSortTaken && imageValid
+      ? !!form.imageName?.trim() && !currentSortTaken && imageValid && countries.length > 0
       : !!form.title?.trim();
 
   return (
@@ -377,6 +382,8 @@ function ItemForm({
         }
         .if-media-switch button.active { background: var(--bg-surface); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
         .if-media-switch button:disabled { cursor: default; opacity: 0.6; }
+        .if-link { font-size: 12px; font-weight: 600; color: var(--blue); background: none; border: none; cursor: pointer; padding: 0; font-family: inherit; }
+        .if-link:disabled { opacity: 0.5; cursor: default; }
         .if-media-tip {
           display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; padding: 9px 11px;
           font-size: 12px; line-height: 1.5; color: var(--text-secondary);
@@ -417,7 +424,7 @@ function ItemForm({
                 <div className="if-media-tip-meta">
                   {mediaType === "image"
                     ? "JPG, PNG or WebP · up to 5 MB"
-                    : "MP4 (H.264) · up to 25 MB · up to 30 seconds · plays without sound"}
+                    : "MP4 (H.264) · up to 25 MB · up to 30 seconds · plays with sound (users can mute)"}
                 </div>
               </div>
             </div>
@@ -446,7 +453,7 @@ function ItemForm({
                   onUploadingChange={setVideoUploading}
                   onUploaded={(url) => uploadedRef.current.push(url)}
                 />
-                <div className="if-sort-hint">Plays muted in the app&apos;s home carousel, then moves to the next slide.</div>
+                <div className="if-sort-hint">Plays with sound in the app&apos;s home carousel (users can mute it), then moves to the next slide.</div>
               </>
             )}
             {carouselNoImage && (
@@ -461,6 +468,28 @@ function ItemForm({
             if (!src || busy || (mediaType === "image" && !imageValid)) return null;
             return <CarouselPreview key={`${mediaType}:${src}`} kind={mediaType} src={src} />;
           })()}
+          <div>
+            <div className="if-media-head">
+              <label className="if-label" style={{ marginBottom: 0 }}>Show in countries *</label>
+              <button type="button" className="if-link" onClick={() => setCountryPickerOpen(true)} disabled={loading}>
+                Choose countries
+              </button>
+            </div>
+            <CountrySummary codes={countries} />
+            <div className="if-sort-hint" style={countries.length === 0 ? { color: "var(--red)" } : undefined}>
+              {countries.length === 0
+                ? "Pick at least one country — otherwise no one would see this slide."
+                : coversAllCountries(countries)
+                  ? "Shown to users in every available country."
+                  : "Only users in the chosen countries will see this slide."}
+            </div>
+            <CountryPickerModal
+              open={countryPickerOpen}
+              value={countries}
+              onClose={() => setCountryPickerOpen(false)}
+              onApply={(codes) => set("countries", codes)}
+            />
+          </div>
           <div>
             <label className="if-label">Image Name *</label>
             <input className="if-input" value={form.imageName ?? ""} onChange={(e) => set("imageName", e.target.value)} disabled={loading} placeholder="Display name for this carousel item…" />
@@ -1044,6 +1073,7 @@ function SectionPanel({
             <tr>
               {hasCategories(sectionKey) && <th>Category</th>}
               <th>Content</th>
+              {sectionKey === "carousel_items" && <th>Countries</th>}
               <th>Sort #</th>
               <th>Status</th>
               <th>Updated</th>
@@ -1053,7 +1083,7 @@ function SectionPanel({
           <tbody>
             {pagedItems.length === 0 ? (
               <tr>
-                <td colSpan={hasCategories(sectionKey) ? 6 : 5} className="cm-empty">
+                <td colSpan={5 + (hasCategories(sectionKey) ? 1 : 0) + (sectionKey === "carousel_items" ? 1 : 0)} className="cm-empty">
                   No items found.{!search && ` Click "Add Item" to create the first one.`}
                 </td>
               </tr>
@@ -1069,6 +1099,9 @@ function SectionPanel({
                       {videoOf(item) && <Badge variant="purple">Video</Badge>}
                     </div>
                   </td>
+                  {sectionKey === "carousel_items" && (
+                    <td><CountrySummary codes={slideCountries(item)} compact /></td>
+                  )}
                   <td style={{ fontFamily: "'Space Mono', monospace" }}>{item.sortNumber}</td>
                   <td>
                     <Badge variant={item.sortNumber > 0 ? "green" : "amber"} dot>

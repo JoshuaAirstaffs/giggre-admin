@@ -32,6 +32,8 @@ export interface CarouselItem extends BaseItem {
   imageName: string; // Name given by admin
   /** Optional MP4 URL. Apps that can't play it keep showing `picture`. */
   video?: string;
+  /** ISO country codes this slide shows in; missing = every country. */
+  countries?: string[];
 }
 
 export interface UpdateItem extends BaseItem {
@@ -140,7 +142,7 @@ export function emptyItemForSection(key: ContentSectionKey): Partial<ContentItem
   const base = { sortNumber: 1 };
   switch (key) {
     case "carousel_items":
-      return { ...base, picture: "", imageName: "", video: "" };
+      return { ...base, picture: "", imageName: "", video: "", countries: ["PH", "US"] };
     case "updates":
       return { ...base, category: "", title: "", body: "" };
     case "about_giggre":
@@ -349,6 +351,7 @@ export function useContent(actor: ActorInfo) {
             if ("picture" in form) payload.picture = form.picture;
             if ("imageName" in form) payload.imageName = form.imageName;
             if ("video" in form) payload.video = (form as Partial<CarouselItem>).video ?? "";
+            if ("countries" in form) payload.countries = (form as Partial<CarouselItem>).countries ?? [];
             break;
           case "updates":
             if ("category" in form) payload.category = (form as any).category ?? "";
