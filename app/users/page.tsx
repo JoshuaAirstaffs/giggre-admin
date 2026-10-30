@@ -23,6 +23,7 @@ import {
 } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase";
 import { writeLog, buildDescription } from "@/lib/activitylog";
+import EarningLimitField from "./EarningLimitField";
 import {
   Search, ChevronDown, ChevronUp, X,
   Users, ArrowUpDown, ExternalLink, Clock, ShieldOff,
@@ -515,6 +516,7 @@ const ExpandedRow = memo(function ExpandedRow({
               <span className="exp-value" style={{ color: "var(--red)" }}>{formatDate(user.scheduledDeleteAt)}</span>
             </div>
           )}
+          <EarningLimitField uid={user.id} isVerified={user.isVerified} />
           <div className="exp-field">
             <span className="exp-label">Last Online</span>
             <span className="exp-value">{user.isOnline ? <span style={{ color: "var(--green)" }}>Now</span> : formatRelativeTime(user.lastOnline)}</span>
