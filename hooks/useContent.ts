@@ -16,6 +16,7 @@ import {
 import { db } from "@/lib/firebase";
 import { writeLog, buildDescription } from "@/lib/activitylog";
 import type { ContentSectionKey, LogPayload } from "@/lib/activitylog";
+import { countryByCode, slideCountries } from "@/lib/carouselCountries";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -126,6 +127,50 @@ export function sectionPath(sectionKey: ContentSectionKey): string {
 
 export function hasCategories(key: ContentSectionKey): boolean {
   return key === "updates" || key === "help_faq";
+}
+
+const countryNames = (codes: string[]) =>
+  codes.length ? codes.map((c) => countryByCode(c)?.name ?? c).join(", ") : "none";
+
+const visibility = (sort: number) => (sort > 0 ? `shown (#${sort})` : "hidden");
+
+/** What a new carousel slide was created with, for its activity log. */
+export function describeCarouselCreate(form: Partial<CarouselItem>): string[] {
+  const out = [form.video ? "video" : form.picture ? "image" : "no media"];
+  out.push(`countries: ${countryNames(slideCountries(form))}`);
+  out.push(visibility(Number(form.sortNumber ?? 1)));
+  return out;
+}
+
+/** What changed on a carousel slide, for its activity log. Only fields in `form` count. */
+export function describeCarouselChanges(item: CarouselItem, form: Partial<CarouselItem>): string[] {
+  const out: string[] = [];
+  if ("imageName" in form && (form.imageName ?? "") !== (item.imageName ?? "")) {
+    out.push(`name: "${item.imageName || "(No name)"}" → "${form.imageName || "(No name)"}"`);
+  }
+  if ("countries" in form) {
+    const before = slideCountries(item);
+    const after = form.countries ?? [];
+    const same = before.length === after.length && before.every((c) => after.includes(c));
+    if (!same) out.push(`countries: ${countryNames(before)} → ${countryNames(after)}`);
+  }
+  const hadVideo = !!item.video, hasVideo = "video" in form ? !!form.video : hadVideo;
+  const hadImage = !!item.picture, hasImage = "picture" in form ? !!form.picture : hadImage;
+  if (hadVideo !== hasVideo || hadImage !== hasImage) {
+    const kind = (v: boolean, i: boolean) => (v ? "video" : i ? "image" : "no media");
+    out.push(`media: ${kind(hadVideo, hadImage)} → ${kind(hasVideo, hasImage)}`);
+  } else if (hasVideo && "video" in form && form.video !== item.video) {
+    out.push("video replaced");
+  } else if (hasImage && "picture" in form && form.picture !== item.picture) {
+    out.push("image replaced");
+  }
+  if ("sortNumber" in form) {
+    const before = Number(item.sortNumber ?? 0), after = Number(form.sortNumber ?? 0);
+    if (before !== after) {
+      out.push(before > 0 && after > 0 ? `sort: ${before} → ${after}` : `${visibility(before)} → ${visibility(after)}`);
+    }
+  }
+  return out;
 }
 
 export function getItemTitle(
@@ -312,7 +357,10 @@ export function useContent(actor: ActorInfo) {
         await log({
           module:      "content_management",
           action:      "content_created",
-          description: buildDescription.contentCreated(actor.actorName, sectionLabel, title),
+          description: buildDescription.contentCreated(
+            actor.actorName, sectionLabel, title,
+            sectionKey === "carousel_items" ? describeCarouselCreate(form as Partial<CarouselItem>) : [],
+          ),
           targetSection: sectionKey,
           targetId:    docRef.id,
           targetName:  title,
@@ -392,7 +440,12 @@ export function useContent(actor: ActorInfo) {
         await log({
           module:      "content_management",
           action:      "content_updated",
-          description: buildDescription.contentUpdated(actor.actorName, sectionLabel, title),
+          description: buildDescription.contentUpdated(
+            actor.actorName, sectionLabel, title,
+            sectionKey === "carousel_items"
+              ? describeCarouselChanges(item as CarouselItem, form as Partial<CarouselItem>)
+              : [],
+          ),
           targetSection: sectionKey,
           targetId:    item.id,
           targetName:  title,
