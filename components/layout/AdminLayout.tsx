@@ -7,6 +7,7 @@ import { useAuthGuard } from "@/hooks/useAuthGuard";
 import ThemeToggle from "../ui/ThemeToggle";
 import DevModeFab from "../ui/DevModeFab";
 import NotificationBell from "../ui/NotificationBell";
+import WelcomeSummary from "../ui/WelcomeSummary";
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -209,7 +210,10 @@ export default function AdminLayout({
           </div>
         </header>
 
-        <main className="admin-content">{children}</main>
+        <main className="admin-content">
+          <WelcomeSummary />
+          {children}
+        </main>
       </div>
 
       <DevModeFab />

@@ -7,6 +7,7 @@ import { auth, googleProvider } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
 import Image from "next/image";
 import ThemeToggle from "@/components/ui/ThemeToggle";
+import { markFreshLogin, clearFreshLogin } from "@/components/ui/WelcomeSummary";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -25,6 +26,15 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [pending, setPending] = useState<number | null>(null);
+
+  // Total requests waiting for review (no details — this is before sign-in)
+  useEffect(() => {
+    fetch("/api/login-summary")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setPending(typeof d?.pending === "number" ? d.pending : null))
+      .catch(() => {});
+  }, []);
 
   // ── Email/password login ───────────────────────────────────────────────────
   const handleLogin = async (e: React.FormEvent) => {
@@ -32,8 +42,11 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
+      // Set before signing in: the redirect to /dashboard can fire first
+      markFreshLogin();
       await signInWithEmailAndPassword(auth, email, password);
     } catch (err: any) {
+      clearFreshLogin();
       let msg = "Something went wrong. Please try again.";
       switch (err.code) {
         case "auth/user-not-found":
@@ -54,8 +67,10 @@ export default function LoginPage() {
     setError("");
     setGoogleLoading(true);
     try {
+      markFreshLogin();
       await signInWithPopup(auth, googleProvider);
     } catch (err: any) {
+      clearFreshLogin();
       if (err.code === "auth/popup-closed-by-user") return;
       if (err.code === "auth/popup-blocked") {
         setError("Popup was blocked. Please allow popups for this site.");
@@ -222,6 +237,20 @@ export default function LoginPage() {
           color: var(--text-primary); margin-bottom: 6px;
         }
         .form-head p { font-size: 14px; color: var(--text-secondary); }
+        .pending-banner {
+          display: flex; align-items: center; gap: 10px;
+          margin: -16px 0 20px; padding: 11px 14px;
+          font-size: 13px; color: var(--text-primary);
+          background: var(--blue-dim); border: 1px solid var(--blue); border-radius: var(--radius-sm);
+          animation: pending-in 0.3s ease-out;
+        }
+        .pending-banner strong { color: var(--blue); }
+        .pending-dot {
+          width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--blue);
+          box-shadow: 0 0 0 0 rgba(59,130,246,0.6); animation: pending-pulse 1.8s infinite;
+        }
+        @keyframes pending-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+        @keyframes pending-pulse { 70% { box-shadow: 0 0 0 7px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }
         .card {
           background: var(--bg-base);
           border: 1px solid var(--border);
@@ -432,6 +461,15 @@ export default function LoginPage() {
               <h2>Welcome back</h2>
               <p>Sign in to your admin account</p>
             </div>
+
+            {pending != null && pending > 0 && (
+              <div className="pending-banner" role="status">
+                <span className="pending-dot" />
+                <span>
+                  <strong>{pending} new {pending === 1 ? "request is" : "requests are"}</strong> waiting for review. Sign in to see {pending === 1 ? "it" : "them"}.
+                </span>
+              </div>
+            )}
 
             <div className="card">
               <div className="form-fields">
