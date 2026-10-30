@@ -201,11 +201,12 @@ export const buildDescription = {
 
   // ── Content management ────────────────────────────────────────────────────
 
-  contentCreated: (actorName: string, sectionLabel: string, itemTitle: string) =>
-    `${actorName} created "${itemTitle}" in ${sectionLabel}`,
+  // `details` (optional) lists what was set or changed, e.g. "countries: Philippines → United States"
+  contentCreated: (actorName: string, sectionLabel: string, itemTitle: string, details: string[] = []) =>
+    `${actorName} created "${itemTitle}" in ${sectionLabel}${details.length ? ` — ${details.join("; ")}` : ""}`,
 
-  contentUpdated: (actorName: string, sectionLabel: string, itemTitle: string) =>
-    `${actorName} updated "${itemTitle}" in ${sectionLabel}`,
+  contentUpdated: (actorName: string, sectionLabel: string, itemTitle: string, details: string[] = []) =>
+    `${actorName} updated "${itemTitle}" in ${sectionLabel}${details.length ? ` — ${details.join("; ")}` : ""}`,
 
   contentDeleted: (actorName: string, sectionLabel: string, itemTitle: string) =>
     `${actorName} deleted "${itemTitle}" from ${sectionLabel}`,

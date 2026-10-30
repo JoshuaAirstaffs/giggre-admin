@@ -27,6 +27,7 @@ import {
 import { writeLog, buildDescription } from "@/lib/activitylog";
 import { toast } from "sonner";
 import UserRequests from "@/app/user-requests/userRequests";
+import { usePendingSkillRequests } from "@/hooks/usePendingSkillRequests";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -114,6 +115,12 @@ export default function UserSkillsPage() {
   const { user } = useAuth();
 
   const [activeTab, setActiveTab] = useState<Tab>("skills");
+  const pendingRequests = usePendingSkillRequests(true);
+
+  // Admin notifications link to /user-skills?tab=requests
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("tab") === "requests") setActiveTab("requests");
+  }, []);
   const { devMode: notifFeaturesEnabled } = useDevMode();
 
   const [skills, setSkills]         = useState<Skill[]>([]);
@@ -590,6 +597,10 @@ export default function UserSkillsPage() {
           color: var(--blue);
           border-bottom-color: var(--blue);
         }
+        .sl-tab-badge {
+          background: var(--blue); color: #fff; font-size: 10px; font-weight: 700;
+          padding: 1px 6px; border-radius: 20px; line-height: 1.4;
+        }
 
         .sl-wrap { display: flex; flex-direction: column; gap: 20px; }
 
@@ -926,6 +937,9 @@ export default function UserSkillsPage() {
         >
           <ClipboardList size={14} />
           Skill Requests
+          {pendingRequests > 0 && (
+            <span className="sl-tab-badge" title={`${pendingRequests} pending`}>{pendingRequests > 99 ? "99+" : pendingRequests}</span>
+          )}
         </button>
         {notifFeaturesEnabled && (
           <button

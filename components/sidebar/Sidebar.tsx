@@ -15,6 +15,7 @@ import type { AdminUser } from "@/context/AuthContext";
 import { useAuth } from "@/context/AuthContext";
 import SidebarItem from "./SidebarItem";
 import { usePendingVerifications } from "@/hooks/usePendingVerifications";
+import { usePendingSkillRequests } from "@/hooks/usePendingSkillRequests";
 import { usePendingGigPointsRequests, usePendingWalletRequests } from "@/hooks/usePendingGigPointsRequests";
 import type { ModuleKey } from "@/lib/modules";
 
@@ -106,8 +107,10 @@ export default function Sidebar({ collapsed, onToggle, user }: SidebarProps) {
   const pendingVerifications = usePendingVerifications(hasPermission("verification"));
   const pendingPointsRequests = usePendingGigPointsRequests(hasPermission("gig-points"));
   const pendingWalletRequests = usePendingWalletRequests(hasPermission("wallet"));
+  const pendingSkillRequests = usePendingSkillRequests(hasPermission("library-gsin"));
   const badges: Partial<Record<ModuleKey, number>> = {
     verification: pendingVerifications,
+    "library-gsin": pendingSkillRequests,
     "gig-points": pendingPointsRequests,
     wallet: pendingWalletRequests,
   };
