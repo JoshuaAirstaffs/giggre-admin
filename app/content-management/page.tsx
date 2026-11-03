@@ -22,6 +22,7 @@ import {
   type SectionData,
 } from "@/hooks/useContent";
 import { AboutGiggrePanel } from "@/components/ui/content/AboutGiggrePanel";
+import { TutorialVideosPanel } from "@/components/ui/content/TutorialVideosPanel";
 import { ImageUploadField } from "@/components/ui/content/ImageUploadField";
 import { VideoUploadField } from "@/components/ui/content/VideoUploadField";
 import { CarouselPreview } from "@/components/ui/content/CarouselPreview";
@@ -32,7 +33,7 @@ import type { ContentSectionKey } from "@/lib/activitylog";
 import {
   Plus, Edit2, Trash2, Settings, Tag, Shuffle,
   Image, HelpCircle, Shield, ScrollText, Info, RefreshCw,
-  X, AlertCircle, Check, ChevronLeft, ChevronRight, Info as InfoIcon,
+  X, AlertCircle, Check, ChevronLeft, ChevronRight, Info as InfoIcon, PlayCircle,
 } from "lucide-react";
 import type { SectionState } from "@/hooks/usePerSectionData";
 
@@ -51,11 +52,14 @@ const SECTIONS: {
     { key: "terms_and_conditions", label: "Terms & Conditions", icon: ScrollText, description: "Terms and conditions sections",   color: "var(--amber)"  },
     { key: "privacy",            label: "Privacy Policy",     icon: Shield,     description: "Privacy policy sections",           color: "var(--orange)" },
     { key: "help_faq",           label: "Help / FAQ",         icon: HelpCircle, description: "Help center FAQ items",             color: "var(--red)"    },
+    { key: "tutorial_videos",    label: "Tutorial Videos",    icon: PlayCircle, description: "How-to videos (Welcome, Log In, Sign Up, Profile)", color: "var(--blue)" },
   ];
 
 const SECTION_KEYS = SECTIONS.map((s) => s.key);
 
-const ITEM_BASED_SECTIONS = SECTION_KEYS.filter((k) => k !== "about_giggre");
+// Sections with their own panel (not the generic item editor).
+const CUSTOM_SECTIONS: ContentSectionKey[] = ["about_giggre", "tutorial_videos"];
+const ITEM_BASED_SECTIONS = SECTION_KEYS.filter((k) => !CUSTOM_SECTIONS.includes(k));
 
 const ITEMS_PER_PAGE = 10;
 
@@ -1230,12 +1234,12 @@ export default function ContentManagementPage() {
   );
 
   useEffect(() => {
-    if (activeTab !== "about_giggre") fetchSection(activeTab);
+    if (!CUSTOM_SECTIONS.includes(activeTab)) fetchSection(activeTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   const tabConfigs = SECTIONS.map((s) => {
-    if (s.key === "about_giggre") {
+    if (CUSTOM_SECTIONS.includes(s.key)) {
       return { ...s, count: undefined, loading: false };
     }
     const state = getSection(s.key);
@@ -1258,6 +1262,10 @@ export default function ContentManagementPage() {
         <div className="cm-tab-content">
           {activeTab === "about_giggre" && (
             <AboutGiggrePanel actor={actor} />
+          )}
+
+          {activeTab === "tutorial_videos" && (
+            <TutorialVideosPanel actor={actor} />
           )}
 
           {ITEM_BASED_SECTIONS.map((key) =>

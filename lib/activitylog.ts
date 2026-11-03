@@ -140,7 +140,8 @@ export type ContentSectionKey =
   | "about_giggre"
   | "terms_and_conditions"
   | "privacy"
-  | "help_faq";
+  | "help_faq"
+  | "tutorial_videos";
 
 // ─── Unified Log Params ───────────────────────────────────────────────────────
 

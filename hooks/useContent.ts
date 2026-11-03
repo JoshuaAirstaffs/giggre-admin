@@ -198,6 +198,8 @@ export function emptyItemForSection(key: ContentSectionKey): Partial<ContentItem
       return { ...base, title: "", body: "" };
     case "help_faq":
       return { ...base, category: "", title: "", body: "" };
+    case "tutorial_videos":
+      return base; // managed by TutorialVideosPanel, not the generic editor
   }
 }
 

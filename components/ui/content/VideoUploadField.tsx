@@ -29,7 +29,7 @@ function readDuration(file: File): Promise<number | null> {
 }
 
 /**
- * Optional carousel video. Uploads to Firebase Storage under `folder` and
+ * MP4 upload (carousel slides, tutorial videos). Uploads to Firebase Storage under `folder` and
  * reports the download URL via onChange ("" when removed).
  */
 export function VideoUploadField({
@@ -39,6 +39,10 @@ export function VideoUploadField({
   disabled,
   onUploadingChange,
   onUploaded,
+  maxBytes = MAX_BYTES,
+  maxSeconds = MAX_SECONDS,
+  onDuration,
+  label = "Optional: click or drop an MP4 video",
 }: {
   value: string;
   onChange: (url: string) => void;
@@ -47,6 +51,12 @@ export function VideoUploadField({
   onUploadingChange?: (uploading: boolean) => void;
   /** Every file this field uploads, so the form can clean up ones never saved */
   onUploaded?: (url: string) => void;
+  /** Defaults: 25 MB / 30 s (carousel). Tutorial videos allow more. */
+  maxBytes?: number;
+  maxSeconds?: number;
+  /** Length of the uploaded video in seconds. */
+  onDuration?: (seconds: number) => void;
+  label?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const taskRef = useRef<UploadTask | null>(null);
@@ -64,8 +74,8 @@ export function VideoUploadField({
       toast.error("Unsupported video", "Only MP4 videos can be uploaded.");
       return;
     }
-    if (file.size > MAX_BYTES) {
-      toast.error("Video too large", `Max ${MAX_BYTES / 1024 / 1024} MB — this one is ${(file.size / 1024 / 1024).toFixed(1)} MB.`);
+    if (file.size > maxBytes) {
+      toast.error("Video too large", `Max ${maxBytes / 1024 / 1024} MB — this one is ${(file.size / 1024 / 1024).toFixed(1)} MB.`);
       return;
     }
     const seconds = await readDuration(file);
@@ -73,8 +83,9 @@ export function VideoUploadField({
       toast.error("Unreadable video", "This MP4 couldn't be opened. Try exporting it again (H.264).");
       return;
     }
-    if (seconds > MAX_SECONDS + 0.5) {
-      toast.error("Video too long", `Max ${MAX_SECONDS} seconds — this one is ${Math.round(seconds)} seconds.`);
+    if (seconds > maxSeconds + 0.5) {
+      const fmt = (n: number) => (n >= 120 ? `${Math.round(n / 60)} minutes` : `${Math.round(n)} seconds`);
+      toast.error("Video too long", `Max ${fmt(maxSeconds)} — this one is ${fmt(seconds)}.`);
       return;
     }
 
@@ -100,6 +111,7 @@ export function VideoUploadField({
         try {
           const url = await getDownloadURL(task.snapshot.ref);
           onUploaded?.(url);
+          onDuration?.(Math.round(seconds));
           onChange(url);
           toast.success("Video uploaded");
         } finally {
@@ -161,8 +173,10 @@ export function VideoUploadField({
         ) : (
           <>
             <Film size={16} />
-            <span>Optional: click or drop an MP4 video</span>
-            <span style={{ fontSize: 11, opacity: 0.8 }}>MP4 · up to {MAX_BYTES / 1024 / 1024} MB · up to {MAX_SECONDS} seconds</span>
+            <span>{label}</span>
+            <span style={{ fontSize: 11, opacity: 0.8 }}>
+              MP4 · up to {maxBytes / 1024 / 1024} MB · up to {maxSeconds >= 120 ? `${Math.round(maxSeconds / 60)} minutes` : `${maxSeconds} seconds`}
+            </span>
           </>
         )}
       </div>
