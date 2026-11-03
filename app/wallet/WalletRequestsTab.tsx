@@ -10,7 +10,7 @@ import Modal from "@/components/ui/Modal";
 import { toast } from "@/components/ui/Toaster";
 import { callableError } from "@/lib/gigPoints";
 import {
-  WALLET_TYPES, WALLET_TYPE_LABEL, parseWalletRequest, decideWalletRequest, fmtMoney, refLabel,
+  WALLET_TYPES, WALLET_TYPE_LABEL, parseWalletRequest, decideWalletRequest, fmtMoney, refLabel, payoutRefLabel,
   type WalletRequest, type WalletStatus, type WalletType,
 } from "@/lib/wallet";
 
@@ -24,7 +24,7 @@ const STATUS_FILTERS: { key: WalletStatus | "all"; label: string }[] = [
 const STATUS_BADGE: Record<WalletStatus, "amber" | "green" | "red" | "gray"> = {
   pending: "amber", approved: "green", rejected: "red", cancelled: "gray",
 };
-const TYPE_BADGE: Record<WalletType, "green" | "blue"> = { deposit: "green", transfer: "blue" };
+const TYPE_BADGE: Record<WalletType, "green" | "blue" | "amber"> = { deposit: "green", transfer: "blue", withdraw: "amber" };
 const dt = (d: Date | null) =>
   d ? d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
 
@@ -116,6 +116,14 @@ export default function WalletRequestsTab() {
                           )}
                         </div>
                       )}
+                      {r.type === "withdraw" && (
+                        <div>
+                          {r.method ?? "Manual"} · {r.methodKind === "office"
+                            ? "cash pickup"
+                            : <>{r.payoutName} · <b>{r.payoutNumber ?? "—"}</b></>}
+                          {r.payoutReference && <div className="gp-sub">{payoutRefLabel(r.methodKind)} {r.payoutReference}</div>}
+                        </div>
+                      )}
                       {r.note && <div className="gp-sub" style={{ whiteSpace: "pre-wrap" }}>“{r.note}”</div>}
                       {r.status !== "pending" && (
                         <div className="gp-sub" style={{ marginTop: 4 }}>
@@ -147,9 +155,13 @@ export default function WalletRequestsTab() {
 
 function DecisionModal({ req, decision, onClose }: { req: WalletRequest; decision: "approve" | "reject"; onClose: () => void }) {
   const [note, setNote] = useState("");
+  const [reference, setReference] = useState("");
   const [busy, setBusy] = useState(false);
   const [bal, setBal] = useState<number | null>(null);
   const approve = decision === "approve";
+  const isWithdraw = req.type === "withdraw";
+  // Withdraw approvals need the payout reference (not for office pickup).
+  const needsRef = approve && isWithdraw && req.methodKind !== "office";
   const amt = fmtMoney(req.amount, req.currencyCode);
 
   useEffect(() => {
@@ -159,7 +171,7 @@ function DecisionModal({ req, decision, onClose }: { req: WalletRequest; decisio
   const submit = async () => {
     setBusy(true);
     try {
-      await decideWalletRequest({ requestId: req.id, decision, note: note.trim() || undefined });
+      await decideWalletRequest({ requestId: req.id, decision, note: note.trim() || undefined, reference: approve && isWithdraw ? reference.trim() || undefined : undefined });
       toast.success(approve ? `${WALLET_TYPE_LABEL[req.type]} approved` : "Request rejected", "The user has been notified.");
       onClose();
     } catch (err) {
@@ -176,7 +188,7 @@ function DecisionModal({ req, decision, onClose }: { req: WalletRequest; decisio
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
           <Button variant={approve ? "success" : "danger"} icon={approve ? Check : X} loading={busy}
-            disabled={busy || (!approve && note.trim().length < 3)} onClick={submit}>
+            disabled={busy || (!approve && note.trim().length < 3) || (needsRef && reference.trim().length < 4)} onClick={submit}>
             {approve ? "Approve" : "Reject"}
           </Button>
         </>
@@ -192,6 +204,11 @@ function DecisionModal({ req, decision, onClose }: { req: WalletRequest; decisio
           {req.type === "transfer" && req.recipientCurrency && req.recipientCurrency !== req.currencyCode && req.recipientAmount != null && (
             <><dt>They get</dt><dd className="gp-pts">{fmtMoney(req.recipientAmount, req.recipientCurrency)} <span className="gp-sub">(converted at request)</span></dd></>
           )}
+          {isWithdraw && <><dt>Pay out via</dt><dd>{req.method ?? "Manual"}{req.methodKind === "office" ? " (cash pickup)" : ""}</dd></>}
+          {isWithdraw && req.methodKind !== "office" && (
+            <><dt>{req.methodKind === "remittance" ? "Receiver" : "Account name"}</dt><dd>{req.payoutName ?? "—"}</dd>
+              <dt>{req.methodKind === "remittance" ? "Mobile" : "Account no."}</dt><dd><b>{req.payoutNumber ?? "—"}</b></dd></>
+          )}
           {req.note && <><dt>User note</dt><dd style={{ whiteSpace: "pre-wrap" }}>{req.note}</dd></>}
           <dt>GigCash</dt><dd>{bal == null ? "…" : fmtMoney(bal, req.currencyCode)}</dd>
         </dl>
@@ -199,9 +216,22 @@ function DecisionModal({ req, decision, onClose }: { req: WalletRequest; decisio
           {approve
             ? req.type === "deposit"
               ? `${amt} will be added to ${req.userName}'s Gig Wallet. ${req.methodKind === "office" ? `Only approve after checking the cash was received with ${refLabel(req.methodKind)} ${req.reference ?? "—"}.` : req.methodKind === "remittance" ? `Only approve after you've claimed the remittance with ${refLabel(req.methodKind)} ${req.reference ?? "—"}.` : `Only approve after you've confirmed the payment with reference ${req.reference ?? "—"} arrived.`}`
-              : `The ${amt} already on hold will be sent to ${req.recipientName ?? "the recipient"}.`
-            : `${req.userName} will be told why.${req.type === "transfer" ? ` ${amt} is refunded to their Gig Wallet.` : ""}`}
+              : isWithdraw
+                ? req.methodKind === "office"
+                  ? `Only approve once ${req.userName} has received ${amt} in cash and shown a valid ID. The amount is already on hold.`
+                  : req.methodKind === "remittance"
+                    ? `Send ${amt} by ${req.method ?? "remittance"} to ${req.payoutName ?? "the receiver"} (${req.payoutNumber ?? "—"}) first, then enter the control number — the user needs it to claim the money.`
+                    : `Send ${amt} to ${req.method ?? "the account"} ${req.payoutNumber ?? "—"} (${req.payoutName ?? "—"}) first, then enter the reference number of your transfer. The amount is already on hold.`
+                : `The ${amt} already on hold will be sent to ${req.recipientName ?? "the recipient"}.`
+            : `${req.userName} will be told why.${req.type !== "deposit" ? ` ${amt} is refunded to their Gig Wallet.` : ""}`}
         </div>
+        {approve && isWithdraw && (
+          <div>
+            <label className="gp-label">{payoutRefLabel(req.methodKind)}{needsRef ? " (sent to the user)" : " (optional)"}</label>
+            <input className="gp-input" maxLength={60} value={reference} onChange={(e) => setReference(e.target.value)} disabled={busy}
+              placeholder={req.methodKind === "remittance" ? "e.g. 1234-5678-9012" : req.methodKind === "office" ? "e.g. AR 00123" : "e.g. 1234 567 890123"} />
+          </div>
+        )}
         <div>
           <label className="gp-label">{approve ? "Note (optional, internal)" : "Reason (shown to the user)"}</label>
           <textarea className="gp-textarea" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} disabled={busy}

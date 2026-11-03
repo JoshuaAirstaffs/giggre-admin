@@ -16,10 +16,10 @@ const call = <Req, Res>(name: string) => async (data: Req): Promise<Res> =>
 
 export const WALLET_CONFIG_DOC = doc(db, "general_config", "wallet_requests");
 
-export const WALLET_TYPES = ["deposit", "transfer"] as const;
+export const WALLET_TYPES = ["deposit", "transfer", "withdraw"] as const;
 export type WalletType = (typeof WALLET_TYPES)[number];
 export type WalletStatus = "pending" | "approved" | "rejected" | "cancelled";
-export const WALLET_TYPE_LABEL: Record<WalletType, string> = { deposit: "Top up", transfer: "Send" };
+export const WALLET_TYPE_LABEL: Record<WalletType, string> = { deposit: "Top up", transfer: "Send", withdraw: "Withdraw" };
 /** What the proof number is called for each top-up method. */
 export const refLabel = (kind: string | null) =>
   kind === "office" ? "OR no." : kind === "remittance" ? "Control no." : "Ref";
@@ -44,6 +44,10 @@ export interface WalletRequest {
   /** What the recipient gets, in their wallet currency (Send). */
   recipientAmount: number | null;
   recipientCurrency: string | null;
+  /** Withdraw: where to pay it out, and the payout reference once approved. */
+  payoutName: string | null;
+  payoutNumber: string | null;
+  payoutReference: string | null;
   createdAt: Date | null;
   decidedAt: Date | null;
   decidedByName: string | null;
@@ -56,7 +60,7 @@ const s = (v: unknown) => (typeof v === "string" && v ? v : null);
 export function parseWalletRequest(id: string, d: Record<string, unknown>): WalletRequest {
   return {
     id,
-    type: d.type === "transfer" ? "transfer" : "deposit",
+    type: d.type === "transfer" ? "transfer" : d.type === "withdraw" ? "withdraw" : "deposit",
     status: (d.status as WalletStatus) ?? "pending",
     amount: typeof d.amount === "number" ? d.amount : 0,
     currencyCode: s(d.currencyCode) ?? "USD",
@@ -65,6 +69,7 @@ export function parseWalletRequest(id: string, d: Record<string, unknown>): Wall
     recipientId: s(d.recipientId), recipientName: s(d.recipientName), recipientCode: s(d.recipientCode),
     recipientAmount: typeof d.recipientAmount === "number" ? d.recipientAmount : null,
     recipientCurrency: s(d.recipientCurrency),
+    payoutName: s(d.payoutName), payoutNumber: s(d.payoutNumber), payoutReference: s(d.payoutReference),
     createdAt: toDate(d.createdAt), decidedAt: toDate(d.decidedAt),
     decidedByName: s(d.decidedByName), decisionNote: s(d.decisionNote),
   };
@@ -102,12 +107,28 @@ export const DEPOSIT_FIELDS: Record<DepositKind, { method: string; methodHint: s
   },
 };
 export interface DepositAccount { kind: DepositKind; method: string; accountName: string; accountNumber: string; details: string }
+/** How Giggre pays out a withdrawal — same kinds as top ups. */
+export const WITHDRAW_KINDS: { key: DepositKind; label: string; methodLabel: string; methodHint: string; detailsLabel: string; detailsHint: string }[] = [
+  { key: "ewallet", label: "E-wallet / bank", methodLabel: "Method", methodHint: "GCash",
+    detailsLabel: "Note for users (optional)", detailsHint: "Paid out within 1–2 business days." },
+  { key: "office", label: "Cash pickup at office", methodLabel: "Office name", methodHint: "Giggre Makati Office",
+    detailsLabel: "Address & hours", detailsHint: "12F Example Tower, Ayala Ave., Makati. Mon–Fri 9am–5pm." },
+  { key: "remittance", label: "Remittance center", methodLabel: "Remittance center", methodHint: "Palawan Express",
+    detailsLabel: "Note for users (optional)", detailsHint: "Claim at any branch with a valid ID." },
+];
+export interface WithdrawMethod { kind: DepositKind; method: string; details: string }
+/** What the payout reference is called when approving a withdrawal. */
+export const payoutRefLabel = (kind: string | null) =>
+  kind === "remittance" ? "Control / tracking no." : kind === "office" ? "Receipt / acknowledgement no." : "Payout reference no.";
 export interface WalletConfig {
   enabled: boolean;
   deposit: AmountLimits;
   transfer: AmountLimits;
+  withdraw: AmountLimits;
   depositAccounts: DepositAccount[];
   depositNote: string;
+  withdrawMethods: WithdrawMethod[];
+  withdrawNote: string;
 }
 
 const pos = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : null);
@@ -122,19 +143,25 @@ export function parseWalletConfig(d: Record<string, unknown> | undefined): Walle
     enabled: !!d && d.enabled !== false,
     deposit: t("deposit"),
     transfer: t("transfer"),
+    withdraw: t("withdraw"),
     depositAccounts: accounts.map((a) => ({
       kind: (a?.kind === "office" || a?.kind === "remittance" ? a.kind : "ewallet") as DepositKind,
       method: s(a?.method) ?? "", accountName: s(a?.accountName) ?? "",
       accountNumber: s(a?.accountNumber) ?? "", details: s(a?.details) ?? "",
     })),
     depositNote: s(d?.depositNote) ?? "",
+    withdrawMethods: (Array.isArray(d?.withdrawMethods) ? (d!.withdrawMethods as Record<string, unknown>[]) : []).map((m) => ({
+      kind: (m?.kind === "office" || m?.kind === "remittance" ? m.kind : "ewallet") as DepositKind,
+      method: s(m?.method) ?? "", details: s(m?.details) ?? "",
+    })),
+    withdrawNote: s(d?.withdrawNote) ?? "",
   };
 }
 
 // ── Callables ─────────────────────────────────────────────────────────────────
 
 export const decideWalletRequest = call<
-  { requestId: string; decision: "approve" | "reject"; note?: string },
+  { requestId: string; decision: "approve" | "reject"; note?: string; reference?: string },
   { status: WalletStatus }
 >("decideWalletRequest");
 

@@ -10,24 +10,28 @@ import { writeLog } from "@/lib/activitylog";
 import { useFx, phpHint } from "@/lib/fx";
 import FxCard from "./FxCard";
 import {
-  WALLET_CONFIG_DOC, WALLET_TYPES, WALLET_TYPE_LABEL, parseWalletConfig, fmtMoney, DEPOSIT_KINDS, DEPOSIT_FIELDS,
-  type AmountLimits, type DepositAccount, type DepositKind, type WalletConfig, type WalletType,
+  WALLET_CONFIG_DOC, WALLET_TYPES, WALLET_TYPE_LABEL, parseWalletConfig, fmtMoney, DEPOSIT_KINDS, DEPOSIT_FIELDS, WITHDRAW_KINDS,
+  type AmountLimits, type DepositAccount, type DepositKind, type WalletConfig, type WalletType, type WithdrawMethod,
 } from "@/lib/wallet";
 
 const HINTS: Record<WalletType, string> = {
   deposit: "User pays one of the top-up methods below (e-wallet, cash at the office or a remittance center), then submits the reference / receipt / control number and an optional photo. Nothing is held.",
   transfer: "Verified users send GigCash to another user. The amount is taken from the sender when requested and refunded if you reject it.",
+  withdraw: "Verified users cash out using one of the withdraw methods below. The amount is held when requested; you pay it out, then approve with the reference / control number. Rejecting refunds it.",
 };
 
 type LDraft = { enabled: boolean; min: string; max: string; dailyMax: string };
-type Draft = { enabled: boolean; deposit: LDraft; transfer: LDraft; accounts: DepositAccount[]; note: string };
+type Draft = { enabled: boolean; deposit: LDraft; transfer: LDraft; withdraw: LDraft; accounts: DepositAccount[]; note: string; wMethods: WithdrawMethod[]; wNote: string };
 const s = (v: number | null) => (v == null ? "" : String(v));
 const toDraft = (c: WalletConfig): Draft => ({
   enabled: c.enabled,
   deposit: { enabled: c.deposit.enabled, min: s(c.deposit.min), max: s(c.deposit.max), dailyMax: s(c.deposit.dailyMax) },
   transfer: { enabled: c.transfer.enabled, min: s(c.transfer.min), max: s(c.transfer.max), dailyMax: s(c.transfer.dailyMax) },
+  withdraw: { enabled: c.withdraw.enabled, min: s(c.withdraw.min), max: s(c.withdraw.max), dailyMax: s(c.withdraw.dailyMax) },
   accounts: c.depositAccounts,
   note: c.depositNote,
+  wMethods: c.withdrawMethods,
+  wNote: c.withdrawNote,
 });
 /** "" → null; positive amount with ≤ 2 decimals; else NaN. */
 const amt = (v: string) => (v.trim() === "" ? null : /^\d+(\.\d{1,2})?$/.test(v.trim()) && Number(v) > 0 ? Number(v) : NaN);
@@ -64,11 +68,15 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
   })) as Record<WalletType, string | null>;
   const accountsOk = draft.accounts.every((a) => a.method.trim() && a.accountName.trim() && a.accountNumber.trim());
   const depositNoAccounts = parsed.deposit.enabled && draft.accounts.length === 0;
-  const invalid = WALLET_TYPES.some((t) => errs[t]) || !accountsOk || depositNoAccounts;
+  const wMethodsOk = draft.wMethods.every((m) => m.method.trim());
+  const withdrawNoMethods = parsed.withdraw.enabled && draft.wMethods.length === 0;
+  const invalid = WALLET_TYPES.some((t) => errs[t]) || !accountsOk || depositNoAccounts || !wMethodsOk || withdrawNoMethods;
   const dirty = JSON.stringify(draft) !== JSON.stringify(toDraft(saved)) || !exists;
   const disabled = !canEdit || saving;
 
   const setT = (t: WalletType, k: keyof LDraft, v: string | boolean) => setDraft((d) => ({ ...d, [t]: { ...d[t], [k]: v } }));
+  const setW = (i: number, k: keyof WithdrawMethod, v: string) =>
+    setDraft((d) => ({ ...d, wMethods: d.wMethods.map((m, j) => (j === i ? { ...m, [k]: v } : m)) }));
   const setA = (i: number, k: keyof DepositAccount, v: string) =>
     setDraft((d) => ({ ...d, accounts: d.accounts.map((a, j) => (j === i ? { ...a, [k]: v } : a)) }));
 
@@ -77,12 +85,14 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
       enabled: draft.enabled,
       deposit: parsed.deposit,
       transfer: parsed.transfer,
-      withdraw: { enabled: false, min: null, max: null, dailyMax: null },
+      withdraw: parsed.withdraw,
       depositAccounts: draft.accounts.map((a) => ({
         kind: a.kind, method: a.method.trim(), accountName: a.accountName.trim(),
         accountNumber: a.accountNumber.trim(), details: a.details.trim(),
       })),
       depositNote: draft.note.trim(),
+      withdrawMethods: draft.wMethods.map((m) => ({ kind: m.kind, method: m.method.trim(), details: m.details.trim() })),
+      withdrawNote: draft.wNote.trim(),
     };
     setSaving(true);
     try {
@@ -91,7 +101,7 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
       await writeLog({
         actorId: user.uid, actorName: user.displayName ?? user.email ?? "Unknown", actorEmail: user.email ?? undefined,
         module: "wallet", action: "wallet_settings_updated",
-        description: `Updated Gig Wallet settings — ${next.enabled ? describe : "requests paused"} · ${next.depositAccounts.length} top-up account(s)`,
+        description: `Updated Gig Wallet settings — ${next.enabled ? describe : "requests paused"} · ${next.depositAccounts.length} top-up account(s) · ${next.withdrawMethods.length} withdraw method(s)`,
         targetId: "general_config/wallet_requests", targetName: "Gig Wallet settings",
         affectedFiles: ["general_config/wallet_requests"],
         meta: { from: exists ? saved : null, to: next },
@@ -119,7 +129,7 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
         <div className="gp-head">
           <div>
             <div className="gp-title">Wallet requests from the app</div>
-            <div className="gp-hint">Master switch for Top Up and Send. Withdraw shows &quot;Coming soon&quot; in the app. Pending requests can still be decided when paused.</div>
+            <div className="gp-hint">Master switch for Top Up, Send and Withdraw. Pending requests can still be decided when paused.</div>
           </div>
           <label className="gp-switch">
             <input type="checkbox" checked={draft.enabled} disabled={disabled} onChange={(e) => setDraft((d) => ({ ...d, enabled: e.target.checked }))} />
@@ -228,10 +238,71 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
         </div>
       </div>
 
+      <div className="gp-card" style={{ marginBottom: 16 }}>
+        <div>
+          <div className="gp-title">Withdraw methods</div>
+          <div className="gp-hint">
+            How you pay out withdrawals. Users pick one and give their account / receiver details (e-wallet, remittance) or
+            pick up cash at the office. You pay it out outside the app, then approve the request with the reference or
+            control number — the user is notified with it. Up to 5.
+          </div>
+        </div>
+        {draft.wMethods.map((m, i) => {
+          const k = WITHDRAW_KINDS.find((x) => x.key === m.kind) ?? WITHDRAW_KINDS[0];
+          return (
+            <div key={i} style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div className="gp-row" style={{ gridTemplateColumns: "1fr 1fr auto", alignItems: "end" }}>
+                <div>
+                  <label className="gp-label">Type</label>
+                  <select className="gp-select" value={m.kind} disabled={disabled}
+                    onChange={(e) => {
+                      const kind = e.target.value as DepositKind;
+                      const nk = WITHDRAW_KINDS.find((x) => x.key === kind)!;
+                      setDraft((d) => ({ ...d, wMethods: d.wMethods.map((x, j) => (j === i ? { ...x, kind, method: nk.methodHint } : x)) }));
+                    }}>
+                    {WITHDRAW_KINDS.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="gp-label">{k.methodLabel}</label>
+                  <input className="gp-input" placeholder={k.methodHint} value={m.method} disabled={disabled} maxLength={40}
+                    onChange={(e) => setW(i, "method", e.target.value)} />
+                </div>
+                <Button size="sm" variant="ghost" icon={Trash2} disabled={disabled}
+                  onClick={() => setDraft((d) => ({ ...d, wMethods: d.wMethods.filter((_, j) => j !== i) }))}>Remove</Button>
+              </div>
+              <div>
+                <label className="gp-label">{k.detailsLabel}</label>
+                <input className="gp-input" placeholder={k.detailsHint} value={m.details} disabled={disabled} maxLength={200}
+                  onChange={(e) => setW(i, "details", e.target.value)} />
+              </div>
+            </div>
+          );
+        })}
+        {draft.wMethods.length < 5 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {WITHDRAW_KINDS.map((k) => (
+              <Button key={k.key} size="sm" variant="secondary" icon={Plus} disabled={disabled}
+                onClick={() => setDraft((d) => ({ ...d, wMethods: [...d.wMethods, { kind: k.key, method: k.methodHint, details: "" }] }))}>
+                Add {k.label.toLowerCase()}
+              </Button>
+            ))}
+          </div>
+        )}
+        {!wMethodsOk && <div className="gp-error"><AlertCircle size={14} />Give every withdraw method a name.</div>}
+        {withdrawNoMethods && <div className="gp-error"><AlertCircle size={14} />Add at least one withdraw method while Withdraw is on.</div>}
+        <div>
+          <label className="gp-label">Withdraw instructions for users (optional)</label>
+          <textarea className="gp-textarea" maxLength={500} value={draft.wNote} disabled={disabled}
+            onChange={(e) => setDraft((d) => ({ ...d, wNote: e.target.value }))}
+            placeholder="e.g. Withdrawals are paid out within 1–2 business days. Remittance fees are deducted from the amount." />
+        </div>
+      </div>
+
       <div className="gp-note" style={{ marginBottom: 14 }}>
         Limits are in US dollars; users in the Philippines get them in pesos at the exchange rate above. Each user can have only one
         wallet request waiting for review at a time. The daily cap counts everything a user requested of that
-        type on the same day (Philippine time), whether pending or approved. Only verified accounts can Send.
+        type on the same day (Philippine time), whether pending or approved. Only verified accounts can Send or Withdraw.
         {!exists && " These settings haven't been saved yet, so wallet requests are closed until you save."}
       </div>
 
