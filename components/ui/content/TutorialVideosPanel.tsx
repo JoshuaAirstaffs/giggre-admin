@@ -16,7 +16,7 @@ import type { ActorInfo } from "@/hooks/useContent";
 import {
   PLACEMENTS, TUTORIAL_FOLDER, TUTORIAL_MAX_BYTES, TUTORIAL_MAX_SECONDS,
   createTutorialVideo, deleteTutorialVideo, fmtDuration, reorderTutorialVideos, setTutorialPublished,
-  updateTutorialVideo, watchTutorialVideos, youtubeIdOf, youtubeThumb, emptyVersion,
+  updateTutorialVideo, watchTutorialVideos, youtubeIdOf, youtubeThumb, emptyVersion, keywordsFromText,
   type Placement, type TutorialVideo, type TutorialVideoInput, type VideoSource, type VideoVersion,
 } from "@/lib/tutorialVideos";
 
@@ -231,6 +231,8 @@ type Lang = "en" | "tl";
 interface FormState {
   title: string;
   description: string;
+  /** Comma-separated while editing. */
+  keywords: string;
   placements: Placement[];
   published: boolean;
   order: number;
@@ -240,11 +242,11 @@ interface FormState {
 
 const toForm = (v: TutorialVideo | null, nextOrder: number): FormState => v
   ? {
-    title: v.title, description: v.description, placements: v.placements, published: v.published, order: v.order,
+    title: v.title, description: v.description, keywords: v.keywords.join(", "), placements: v.placements, published: v.published, order: v.order,
     en: { source: v.source, videoUrl: v.videoUrl, youtubeUrl: v.youtubeUrl, youtubeId: v.youtubeId, thumbnailUrl: v.thumbnailUrl, durationSec: v.durationSec, title: "", description: "" },
     tl: v.tl,
   }
-  : { title: "", description: "", placements: ["welcome"], published: true, order: nextOrder, en: emptyVersion(), tl: null };
+  : { title: "", description: "", keywords: "", placements: ["welcome"], published: true, order: nextOrder, en: emptyVersion(), tl: null };
 
 const withYtId = (v: VideoVersion): VideoVersion =>
   ({ ...v, youtubeId: v.source === "youtube" ? youtubeIdOf(v.youtubeUrl) ?? "" : "" });
@@ -252,7 +254,7 @@ const withYtId = (v: VideoVersion): VideoVersion =>
 const toInput = (f: FormState): TutorialVideoInput => {
   const en = withYtId(f.en);
   return {
-    title: f.title, description: f.description, placements: f.placements, published: f.published, order: f.order,
+    title: f.title, description: f.description, keywords: keywordsFromText(f.keywords), placements: f.placements, published: f.published, order: f.order,
     source: en.source, videoUrl: en.videoUrl, youtubeUrl: en.youtubeUrl, youtubeId: en.youtubeId,
     thumbnailUrl: en.thumbnailUrl, durationSec: en.durationSec,
     tl: f.tl ? withYtId(f.tl) : null,
@@ -364,6 +366,16 @@ function VideoForm({
           <label style={label}>Short description (English, optional)</label>
           <input style={input} maxLength={140} value={form.description} onChange={(e) => set("description", e.target.value)}
             placeholder="Create your Giggre account in under a minute." />
+        </div>
+
+        <div>
+          <label style={label}>Search keywords (optional)</label>
+          <input style={input} maxLength={400} value={form.keywords} onChange={(e) => set("keywords", e.target.value)}
+            placeholder="signup, register, create account, mag-register" />
+          <div style={hint}>
+            Comma-separated words people might search for in the app&apos;s Video Tutorials. The title, description and common
+            synonyms (e.g. Sign up ↔ Register, Log in ↔ Sign in, Top up ↔ Cash in) already match without these.
+          </div>
         </div>
 
         <div>

@@ -1,11 +1,103 @@
 rules_version = '2';
 
+// Firebase Storage rules — deployed from giggre_app (firebase.json "storage").
+// giggre-admin/storage.rules is a copy of this file; keep them identical and
+// deploy from giggre_app only.
+//
+// Everything is closed unless a path below opens it. Files already shown in
+// the app through their download URLs keep working (those URLs carry their
+// own access token); these rules govern uploads, deletes and SDK reads.
+// Cloud Functions / the admin API (Admin SDK) are not affected.
+//
+// Paths in use (2026-11-05):
+//   profile_images/{uid}.jpg                    avatar_service, profile tabs
+//   users/{uid}/documents/{category}/{file}     My Documents (verification IDs)
+//   skill_requests/{uid}/{file}                 skill request proofs
+//   wallet_proofs/{uid}/{clientRequestId}.jpg   Gig Wallet top-up proof
+//   chat_attachments/{roomId}/{file}            chat.dart attachments
+//   app_content/**                              giggre-admin CMS (carousel,
+//                                               tutorial videos, thumbnails)
 service firebase.storage {
   match /b/{bucket}/o {
 
-    match /{allPaths=**} {
-      allow read, write: if true;
+    function signedIn() {
+      return request.auth != null;
     }
 
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // Same test as isAdmin() in firestore.rules (admins/{uid}).
+    function isAdmin() {
+      let path = /databases/(default)/documents/admins/$(request.auth.uid);
+      return signedIn() &&
+        firestore.exists(path) &&
+        firestore.get(path).data.isActive == true &&
+        firestore.get(path).data.isPending == false;
+    }
+
+    function maxMB(mb) {
+      return request.resource.size <= mb * 1024 * 1024;
+    }
+
+    // ── CMS media (giggre-admin → Content Management) ───────────────────────
+    // Public: the Welcome / Log In / Sign Up screens show it before sign-in.
+    match /app_content/{path=**} {
+      allow read: if true;
+      allow create, update: if isAdmin() && maxMB(250);
+      allow delete: if isAdmin();
+    }
+
+    // ── Profile photos ──────────────────────────────────────────────────────
+    match /profile_images/{fileName} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() &&
+        fileName == request.auth.uid + '.jpg' && maxMB(10);
+      allow delete: if (signedIn() && fileName == request.auth.uid + '.jpg') || isAdmin();
+    }
+
+    // ── Verification / My Documents (IDs — owner + admins only) ─────────────
+    match /users/{uid}/documents/{path=**} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create, update: if isOwner(uid) && maxMB(15);
+      allow delete: if isOwner(uid) || isAdmin();
+    }
+
+    // ── Skill request proofs ────────────────────────────────────────────────
+    match /skill_requests/{uid}/{file} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create, update: if isOwner(uid) && maxMB(15);
+      allow delete: if isOwner(uid) || isAdmin();
+    }
+
+    // ── Gig Wallet top-up proof photos ──────────────────────────────────────
+    // The owner uploads (a retry may overwrite the same file); only admins
+    // delete.
+    match /wallet_proofs/{uid}/{file} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create, update: if isOwner(uid) && maxMB(10);
+      allow delete: if isAdmin();
+    }
+
+    // ── Chat attachments ────────────────────────────────────────────────────
+    // Members of the room: gig chats list them in `participants`, support
+    // chats carry the user in `userId` (same test as chat_rooms in
+    // firestore.rules).
+    function inRoom(roomId) {
+      let room = /databases/(default)/documents/chat_rooms/$(roomId);
+      return signedIn() && firestore.exists(room) && (
+        firestore.get(room).data.get('userId', '') == request.auth.uid ||
+        request.auth.uid in firestore.get(room).data.get('participants', [])
+      );
+    }
+
+    match /chat_attachments/{roomId}/{file} {
+      allow read: if inRoom(roomId) || isAdmin();
+      allow create: if inRoom(roomId) && maxMB(25);
+      allow delete: if isAdmin();
+    }
+
+    // Anything else: closed.
   }
 }

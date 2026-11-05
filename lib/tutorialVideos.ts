@@ -12,7 +12,8 @@ import { db } from "@/lib/firebase";
 //
 //   app_content/tutorial_videos                { lastUpdated }
 //   app_content/tutorial_videos/items/{id}
-//     { title, description, placements: Placement[], source: 'upload'|'youtube',
+//     { title, description, keywords: string[] (extra search words for the
+//       app's Video Tutorials search, e.g. "signup, register"), placements: Placement[], source: 'upload'|'youtube',
 //       videoUrl (upload), youtubeUrl, youtubeId, thumbnailUrl, durationSec,
 //       published, order, createdAt, updatedAt, updatedBy,
 //       tl: null | { source, videoUrl, youtubeUrl, youtubeId, thumbnailUrl,
@@ -61,6 +62,8 @@ export interface TutorialVideo {
   id: string;
   title: string;
   description: string;
+  /** Extra search words (any language), lowercase, deduped. */
+  keywords: string[];
   placements: Placement[];
   source: VideoSource;
   videoUrl: string;
@@ -107,6 +110,7 @@ export function parseTutorialVideo(id: string, d: Record<string, unknown>): Tuto
     id,
     title: str(d.title),
     description: str(d.description),
+    keywords: Array.isArray(d.keywords) ? (d.keywords as unknown[]).filter((k): k is string => typeof k === "string") : [],
     placements,
     source: d.source === "youtube" ? "youtube" : "upload",
     videoUrl: str(d.videoUrl),
@@ -159,6 +163,7 @@ function payload(v: TutorialVideoInput, uid: string) {
   return {
     title: v.title.trim(),
     description: v.description.trim(),
+    keywords: normalizeKeywords(v.keywords),
     placements: v.placements,
     source: v.source,
     videoUrl: v.source === "upload" ? v.videoUrl : "",
@@ -205,3 +210,15 @@ export async function reorderTutorialVideos(ids: string[]) {
 
 export const fmtDuration = (s: number | null) =>
   s == null ? "" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+
+/** "Signup, register ,  Sign up" → ["signup", "register", "sign up"] (max 20, ≤ 40 chars each). */
+export function normalizeKeywords(list: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of list) {
+    const k = raw.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 40);
+    if (k && !out.includes(k)) out.push(k);
+  }
+  return out.slice(0, 20);
+}
+
+export const keywordsFromText = (text: string) => normalizeKeywords(text.split(/[,\n]/));
