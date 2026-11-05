@@ -8,6 +8,7 @@ import ThemeToggle from "../ui/ThemeToggle";
 import DevModeFab from "../ui/DevModeFab";
 import NotificationBell from "../ui/NotificationBell";
 import WelcomeSummary from "../ui/WelcomeSummary";
+import SupportMessageAlerts from "../ui/SupportMessageAlerts";
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -202,6 +203,7 @@ export default function AdminLayout({
           <div className="topbar-right">
             {actions && <div className="topbar-actions">{actions}</div>}
             <NotificationBell />
+            <SupportMessageAlerts />
             <ThemeToggle/>
 
             <Link href="/profile" className="topbar-avatar" title={user.displayName ?? "My Profile"}>
