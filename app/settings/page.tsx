@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useCurrency, type CurrencySymbol } from "@/context/CurrencyContext";
 import UnverifiedLimitCard from "./UnverifiedLimitCard";
+import SearchProfilesCard from "./SearchProfilesCard";
 
 // ─── Firestore doc refs ───────────────────────────────────────────────────────
 
@@ -420,6 +421,9 @@ export default function SettingsPage() {
 
           {/* ── Unverified account limit ───────────────────────────────────── */}
           {user && <UnverifiedLimitCard user={user} canEdit={isSuperAdmin} />}
+
+          {/* ── User search profiles ───────────────────────────────────────── */}
+          {user && <SearchProfilesCard user={user} canEdit={isSuperAdmin} />}
 
           {/* ── 4. Gig Expiry ───────────────────────────────────────────────── */}
           <SectionCard icon={<Timer size={15} />} title="Gig Auto-Expiry" accent="var(--purple, #a855f7)">
