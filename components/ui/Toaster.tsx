@@ -1,17 +1,19 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { CheckCircle, XCircle, AlertTriangle, Info, X } from "lucide-react";
+import { CheckCircle, XCircle, AlertTriangle, Info, Bell, X } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ToastType = "success" | "error" | "warning" | "info";
+export type ToastType = "success" | "error" | "warning" | "info" | "notify";
 
 interface Toast {
   id: string;
   type: ToastType;
   title: string;
   message?: string;
+  /** Makes the whole toast clickable (notification pop-ups) */
+  onOpen?: () => void;
 }
 
 // ─── Singleton store (simple module-level state for easy global use) ──────────
@@ -29,13 +31,15 @@ export const toast = {
   error:   (title: string, message?: string) => add("error",   title, message),
   warning: (title: string, message?: string) => add("warning", title, message),
   info:    (title: string, message?: string) => add("info",    title, message),
+  /** New admin notification / message pop-up — stays longer, click to open */
+  notify:  (title: string, message?: string, onOpen?: () => void) => add("notify", title, message, onOpen, 8000),
 };
 
-function add(type: ToastType, title: string, message?: string) {
+function add(type: ToastType, title: string, message?: string, onOpen?: () => void, duration = 4500) {
   const id = Math.random().toString(36).slice(2);
-  _toasts = [..._toasts, { id, type, title, message }];
+  _toasts = [..._toasts, { id, type, title, message, onOpen }];
   notify();
-  setTimeout(() => remove(id), 4500);
+  setTimeout(() => remove(id), duration);
 }
 
 function remove(id: string) {
@@ -63,6 +67,7 @@ const ICONS: Record<ToastType, React.FC<{ size: number }>> = {
   error:   ({ size }) => <XCircle     size={size} style={{ color: "var(--red)"   }} />,
   warning: ({ size }) => <AlertTriangle size={size} style={{ color: "var(--amber)" }} />,
   info:    ({ size }) => <Info          size={size} style={{ color: "var(--blue)"  }} />,
+  notify:  ({ size }) => <Bell          size={size} style={{ color: "var(--blue)"  }} />,
 };
 
 const BORDER_COLOR: Record<ToastType, string> = {
@@ -70,6 +75,7 @@ const BORDER_COLOR: Record<ToastType, string> = {
   error:   "rgba(239,68,68,0.3)",
   warning: "rgba(245,158,11,0.3)",
   info:    "rgba(59,130,246,0.3)",
+  notify:  "var(--blue)",
 };
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -128,6 +134,9 @@ export default function Toaster() {
           cursor: pointer;
         }
         .toast-dismiss:hover { background: var(--bg-elevated); color: var(--text-primary); }
+        .toast-item.clickable { cursor: pointer; }
+        .toast-item.clickable:hover { background: var(--bg-elevated); }
+        .toast-msg.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
       `}</style>
 
       {toasts.map((t) => {
@@ -135,15 +144,17 @@ export default function Toaster() {
         return (
           <div
             key={t.id}
-            className="toast-item"
+            className={`toast-item${t.onOpen ? " clickable" : ""}`}
             style={{ borderLeftColor: BORDER_COLOR[t.type], borderLeftWidth: 3 }}
+            onClick={t.onOpen ? () => { remove(t.id); t.onOpen!(); } : undefined}
+            role={t.onOpen ? "button" : undefined}
           >
             <Icon size={18} />
             <div className="toast-body">
               <div className="toast-title">{t.title}</div>
-              {t.message && <div className="toast-msg">{t.message}</div>}
+              {t.message && <div className={`toast-msg${t.onOpen ? " clamp" : ""}`}>{t.message}</div>}
             </div>
-            <button className="toast-dismiss" onClick={() => remove(t.id)}>
+            <button className="toast-dismiss" onClick={(e) => { e.stopPropagation(); remove(t.id); }} aria-label="Dismiss">
               <X size={13} />
             </button>
           </div>

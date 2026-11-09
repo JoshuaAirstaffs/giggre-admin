@@ -6,6 +6,8 @@ import { Bell } from "lucide-react";
 import { useAdminNotifications } from "@/hooks/useAdminNotifications";
 import type { AdminNotification } from "@/lib/notifications";
 import { useAuth } from "@/context/AuthContext";
+import { toast } from "@/components/ui/Toaster";
+import { playNotifSound } from "@/lib/notifSound";
 
 // ── Relative time, no date lib dependency in this repo ──────────────────────
 function timeAgo(date: Date | null): string {
@@ -20,12 +22,36 @@ function timeAgo(date: Date | null): string {
   return `${days}d ago`;
 }
 
+// Module-level (not component state): every page renders its own bell, so this
+// keeps a page change from treating the existing notifications as new.
+let seen: { uid: string; ids: Set<string> } | null = null;
+
 export default function NotificationBell() {
   const { user } = useAuth();
-  const { notifications, unreadCount, markAsRead } = useAdminNotifications();
+  const { notifications, unreadCount, markAsRead, loading } = useAdminNotifications();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+
+  // ── Pop up + chime for new unread notifications ────────────────────────────
+  useEffect(() => {
+    if (!user || loading) return;
+    if (seen?.uid !== user.uid) {
+      // First load for this admin: what's already there isn't new
+      seen = { uid: user.uid, ids: new Set(notifications.map((n) => n.id)) };
+      return;
+    }
+    const fresh = notifications.filter((n) => !seen!.ids.has(n.id));
+    fresh.forEach((n) => seen!.ids.add(n.id));
+    const unread = fresh.filter((n) => !n.readBy[user.uid]);
+    if (unread.length === 0) return;
+    playNotifSound();
+    // Oldest first so the newest ends up at the bottom, nearest the eye
+    unread.slice(0, 3).reverse().forEach((n) =>
+      toast.notify(n.title, n.message, () => { markAsRead(n.id); router.push(n.link); }),
+    );
+    if (unread.length > 3) toast.notify(`${unread.length - 3} more notifications`, "Open the bell to see them all.");
+  }, [notifications, loading, user, markAsRead, router]);
 
   // ── Close dropdown on outside click ────────────────────────────────────────
   useEffect(() => {
