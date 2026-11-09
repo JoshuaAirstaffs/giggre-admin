@@ -49,7 +49,12 @@ interface TimeLimitsConfig {
 
 interface MatchingEngineConfig {
   review_window_seconds: number;
+  // Per-region radius (app + website read both — see distance_units.dart):
+  //   max_search_radius_km     Philippines & everyone else, km   (null = no limit)
+  //   max_search_radius_mi_us  United States, miles              (null = no limit,
+  //                            missing = follow the km value)
   max_search_radius_km: number | null;
+  max_search_radius_mi_us?: number | null;
   allow_reassignment_after_exhaustion: boolean;
   search_timeout_minutes: number;
   max_dispatch_attempts: number;
@@ -229,7 +234,12 @@ export default function QuickGigsPage() {
         //   setSavedTimeLimits({ ...timeLimits });
         //   break;
         case "matching_engine":
-          await setDoc(docRef("matching_engine"), matching);
+          // Firestore rejects undefined — a US radius that was never set is left out
+          // (apps then follow the km value).
+          await setDoc(
+            docRef("matching_engine"),
+            Object.fromEntries(Object.entries(matching).filter(([, v]) => v !== undefined)),
+          );
           setSavedMatching({ ...matching });
           break;
         // case "notifications":
@@ -897,42 +907,27 @@ function MatchingEngineTab({
           <span className="qgc-unit">seconds</span>
         </div>
       </div>
-      <div className="qgc-field qgc-field--row">
-        <div className="qgc-field-meta">
-          <div className="qgc-field-label">Max Search Radius</div>
-          <div className="qgc-field-desc">
-            Maximum distance from the gig location to search for available workers. Leave blank
-            to remove the radius limit and search all available workers.
-          </div>
-        </div>
-
-        <div className="qgc-nullable-wrap">
-          {config.max_search_radius_km === null ? (
-            <>
-              <span className="qgc-optional-label">No limit set</span>
-              <Button variant="secondary" size="sm" onClick={() => set("max_search_radius_km", 10)}>
-                Set limit
-              </Button>
-            </>
-          ) : (
-            <>
-              <div className="qgc-number-wrap">
-                <input
-                  className="qgc-number"
-                  type="number"
-                  min={1}
-                  value={config.max_search_radius_km}
-                  onChange={(e) => set("max_search_radius_km", Math.max(1, parseInt(e.target.value) || 1))}
-                />
-                <span className="qgc-unit">km</span>
-              </div>
-              <Button variant="ghost" size="sm" onClick={() => set("max_search_radius_km", null)}>
-                Clear
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
+      <RadiusField
+        label="Max Search Radius — Philippines & other regions"
+        desc="Maximum distance from the gig to search for available workers, for gigs outside the US (PHP and others). No limit searches all available workers."
+        unit="km"
+        value={config.max_search_radius_km}
+        defaultValue={10}
+        onChange={(v) => set("max_search_radius_km", v ?? null)}
+      />
+      <RadiusField
+        label="Max Search Radius — United States"
+        desc="Same, for US gigs (USD), in miles — US users see every distance in miles."
+        unit="mi"
+        value={config.max_search_radius_mi_us}
+        defaultValue={6}
+        followsHint={
+          config.max_search_radius_km === null
+            ? "Not set — US gigs use the Philippines setting (no limit)."
+            : `Not set — US gigs use the Philippines setting (≈ ${(config.max_search_radius_km / 1.609344).toFixed(1)} mi).`
+        }
+        onChange={(v) => set("max_search_radius_mi_us", v)}
+      />
 
       <div className="qgc-field qgc-field--row">
         <div className="qgc-field-meta">
@@ -1121,6 +1116,60 @@ function LoadingSkeleton() {
             <div className="qgc-skeleton" style={{ height: 34, width: 100, borderRadius: 8 }} />
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Radius field (per region) ───────────────────────────────────────────────
+// value: number = limit, null = no limit, undefined = not set (US only:
+// follows the Philippines value).
+function RadiusField({ label, desc, unit, value, defaultValue, followsHint, onChange }: {
+  label: string;
+  desc: string;
+  unit: "km" | "mi";
+  value: number | null | undefined;
+  defaultValue: number;
+  followsHint?: string;
+  onChange: (v: number | null | undefined) => void;
+}) {
+  const other = value == null ? null : unit === "km" ? `≈ ${(value / 1.609344).toFixed(1)} mi` : `≈ ${(value * 1.609344).toFixed(1)} km`;
+  return (
+    <div className="qgc-field qgc-field--row">
+      <div className="qgc-field-meta">
+        <div className="qgc-field-label">{label}</div>
+        <div className="qgc-field-desc">{desc}</div>
+      </div>
+      <div className="qgc-nullable-wrap">
+        {value === undefined && followsHint ? (
+          <>
+            <span className="qgc-optional-label">{followsHint}</span>
+            <Button variant="secondary" size="sm" onClick={() => onChange(defaultValue)}>Set limit</Button>
+          </>
+        ) : value === null ? (
+          <>
+            <span className="qgc-optional-label">No limit set</span>
+            <Button variant="secondary" size="sm" onClick={() => onChange(defaultValue)}>Set limit</Button>
+            {followsHint && (
+              <Button variant="ghost" size="sm" onClick={() => onChange(undefined)}>Use PH setting</Button>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="qgc-number-wrap">
+              <input
+                className="qgc-number"
+                type="number"
+                min={1}
+                value={value}
+                onChange={(e) => onChange(Math.max(1, parseInt(e.target.value) || 1))}
+              />
+              <span className="qgc-unit">{unit === "km" ? "km" : "miles"}</span>
+            </div>
+            <span className="qgc-optional-label">{other}</span>
+            <Button variant="ghost" size="sm" onClick={() => onChange(null)}>No limit</Button>
+          </>
+        )}
       </div>
     </div>
   );
