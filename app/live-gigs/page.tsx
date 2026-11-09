@@ -32,6 +32,7 @@ import {
   Calendar,
   Tag,
   Timer,
+  Tags,
   Copy,
   Check,
 } from "lucide-react";
@@ -40,6 +41,11 @@ import { useAuth } from "@/context/AuthContext";
 import { useCurrency } from "@/context/CurrencyContext";
 import { writeLog, buildDescription } from "@/lib/activitylog";
 import { toast } from "@/components/ui/Toaster";
+import { callableError } from "@/lib/gigPoints";
+import {
+  assignGigTaskType, backfillGigCodes, explainGsku, watchGsinCatalog,
+  type GigCollection, type GsinCategory, type GsinSubcategory, type GsinTaskType,
+} from "@/lib/gsin";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,6 +87,11 @@ interface GigBase {
   cancellationRequestedAt?: Timestamp | null;
   cancelledAt?: Timestamp | null;
   cancellation_reason?: Array<{ approved: boolean | null; reason: string; requestedBy: string }>;
+  // GSIN codes (admin-only; written by Cloud Functions — see functions/src/gsin.ts)
+  taskTypeId?: string;
+  gsins?: string;
+  gsku?: string;
+  gsinCandidates?: string[]; // skill is linked to several task types → admin picks
 }
 
 type Gig = GigBase & Record<string, unknown>;
@@ -317,6 +328,8 @@ function LiveGigsPageInner() {
 
   type ExpiryGig = { id: string; title: string; gigType: string; collection: string; expireAfterHours: number };
   const [runningExpiry, setRunningExpiry] = useState(false);
+  const [assignGig, setAssignGig] = useState<Gig | null>(null);
+  const [backfilling, setBackfilling] = useState(false);
   const [expiryResult, setExpiryResult] = useState<{ expired: number; gigs: ExpiryGig[] } | null>(null);
 
   const openCancelModal = useCallback((gig: Gig) => {
@@ -665,6 +678,30 @@ function LiveGigsPageInner() {
     }
   }, [fetchLiveGigs]);
 
+  // Give GSINS/GSKU codes to existing gigs whose task type can be worked out
+  // from their skill. Runs in batches until nothing is left.
+  const runBackfill = useCallback(async () => {
+    setBackfilling(true);
+    let assigned = 0, failed = 0, noTaskType = 0, needsPick = 0;
+    try {
+      for (let i = 0; i < 20; i++) {
+        const r = await backfillGigCodes({ limit: 300 });
+        assigned += r.assigned; failed += r.failed; noTaskType = r.noTaskType; needsPick = r.needsPick ?? 0;
+        if (r.remaining === 0 || r.assigned === 0) break;
+      }
+      toast.success(
+        `Codes assigned to ${assigned} gig${assigned === 1 ? "" : "s"}`,
+        [needsPick ? `${needsPick} have a skill shared by several task types — use "Pick task type" on their row` : "",
+          noTaskType ? `${noTaskType} have no matching task type — use Assign` : "", failed ? `${failed} failed` : ""].filter(Boolean).join(" · ") || undefined,
+      );
+      if (assigned > 0 || needsPick > 0) fetchLiveGigs();
+    } catch (err) {
+      toast.error("Backfill failed", callableError(err));
+    } finally {
+      setBackfilling(false);
+    }
+  }, [fetchLiveGigs]);
+
   useEffect(() => { fetchLiveGigs(); }, [fetchLiveGigs]);
 
   useEffect(() => {
@@ -718,6 +755,8 @@ function LiveGigsPageInner() {
       list = list.filter(
         (g) =>
           g.id?.toLowerCase().includes(q) ||
+          g.gsins?.toLowerCase().includes(q) ||
+          g.gsku?.toLowerCase().includes(q) ||
           g.title?.toLowerCase().includes(q) ||
           g.category?.toLowerCase().includes(q) ||
           g.postedBy?.toLowerCase().includes(q) ||
@@ -1107,6 +1146,10 @@ function LiveGigsPageInner() {
           <Button variant="ghost" size="sm" icon={Timer} onClick={runAutoExpiry} disabled={runningExpiry || loading}>
             {runningExpiry ? "Running…" : "Run Auto-Expiry"}
           </Button>
+          <Button variant="ghost" size="sm" icon={Tags} onClick={runBackfill} disabled={backfilling || loading}
+            title="Give GSINS/GSKU codes to gigs that don't have one yet">
+            {backfilling ? "Assigning codes…" : "Backfill codes"}
+          </Button>
           <Button variant="ghost" size="sm" icon={RefreshCw} onClick={fetchLiveGigs} disabled={loading}>
             Refresh
           </Button>
@@ -1375,6 +1418,13 @@ function LiveGigsPageInner() {
         .lg-num-label { font-size: 11px; color: var(--text-muted); margin-left: 3px; }
 
         /* ── Empty / Loading ── */
+        .lg-code { font-family: monospace; font-size: 11.5px; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
+        .lg-code-btn { background: none; border: none; padding: 0; cursor: pointer; }
+        .lg-code-btn:hover { color: var(--blue); text-decoration: underline; }
+        .lg-code-none { font-size: 12px; color: var(--text-muted); }
+        .lg-assign-btn { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 6px; border: 1px dashed var(--border); background: transparent; color: var(--text-muted); cursor: pointer; font-family: inherit; }
+        .lg-assign-btn--pick { border-style: solid; border-color: var(--amber, #f59e0b); color: var(--amber, #f59e0b); }
+        .lg-assign-btn:hover { border-color: var(--blue); color: var(--blue); }
         .lg-empty { padding: 60px 24px; text-align: center; color: var(--text-muted); }
         .lg-empty-icon { display: flex; justify-content: center; margin-bottom: 12px; opacity: 0.3; }
         .lg-empty-title { font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
@@ -1780,6 +1830,8 @@ function LiveGigsPageInner() {
                     </th>
                   )}
                   <th>Gig ID</th>
+                  <th title="Task type code: G + category + number">GSINS</th>
+                  <th title="Gig code: T + sub-category + task type + level + service + number">GSKU</th>
                   <th>Gig</th>
                   <th>User</th>
                   <th>Type</th>
@@ -1817,6 +1869,26 @@ function LiveGigsPageInner() {
                       )}
                       <td onClick={(e) => e.stopPropagation()}>
                         <CopyableId id={gig.id} />
+                      </td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        {gig.gsins ? <span className="lg-code">{gig.gsins}</span> : <span className="lg-code-none">—</span>}
+                      </td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        {gig.gsku ? (
+                          <button className="lg-code lg-code-btn" title={`${explainGsku(gig.gsku)}\nClick to change task type`} onClick={() => setAssignGig(gig)}>
+                            {gig.gsku}
+                          </button>
+                        ) : (
+                          <button
+                            className={`lg-assign-btn${gig.gsinCandidates?.length ? " lg-assign-btn--pick" : ""}`}
+                            onClick={() => setAssignGig(gig)}
+                            title={gig.gsinCandidates?.length
+                              ? `This gig's skill is linked to ${gig.gsinCandidates.length} task types (${gig.gsinCandidates.join(", ")}) — pick one`
+                              : "Pick a task type to give this gig its codes"}
+                          >
+                            {gig.gsinCandidates?.length ? "Pick task type" : "Assign"}
+                          </button>
+                        )}
                       </td>
                       <td>
                         <div className="lg-gig-title">{gig.title || "Untitled Gig"}</div>
@@ -2099,6 +2171,16 @@ function LiveGigsPageInner() {
             </>
           )}
         </Modal>
+      )}
+      {assignGig && (
+        <AssignCodesModal
+          gig={assignGig}
+          onClose={() => setAssignGig(null)}
+          onAssigned={(codes) => {
+            setGigs((prev) => prev.map((g) => (g.id === assignGig.id && g.gigType === assignGig.gigType ? { ...g, ...codes } : g)));
+            setAssignGig(null);
+          }}
+        />
       )}
     </AdminLayout>
   );
@@ -2840,3 +2922,98 @@ const EmptyState = memo(function EmptyState({ hasFilter }: { hasFilter: boolean 
     </div>
   );
 });
+
+// ── GSIN: assign a task type (→ GSINS + GSKU) to one gig ─────────────────────
+
+const GIG_CODE_COLLECTION: Record<GigType, GigCollection> = { quick: "quick_gigs", open: "open_gigs", offered: "offered_gigs" };
+
+function AssignCodesModal({ gig, onClose, onAssigned }: {
+  gig: Gig;
+  onClose: () => void;
+  onAssigned: (codes: { taskTypeId: string; gsins?: string; gsku?: string }) => void;
+}) {
+  const [cats, setCats] = useState<GsinCategory[]>([]);
+  const [subs, setSubs] = useState<GsinSubcategory[]>([]);
+  const [tasks, setTasks] = useState<GsinTaskType[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [picked, setPicked] = useState<string>(gig.taskTypeId ?? "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => watchGsinCatalog(
+    (c) => { setCats(c.categories); setSubs(c.subcategories); setTasks(c.taskTypes); },
+    () => setLoadError("Couldn't load the GSIN Library."),
+  ), []);
+
+  const label = (t: GsinTaskType) => {
+    const sub = subs.find((s) => s.id === t.subcategoryId);
+    const cat = cats.find((c) => c.id === t.categoryId);
+    return `${cat?.name ?? t.categoryId} › ${sub?.name ?? t.subcategoryId}`;
+  };
+  // Task types linked to this gig's skill come first ("Suggested").
+  const gigSkill = String(
+    (Array.isArray(gig.requiredSkills) ? (gig.requiredSkills as unknown[])[0] : undefined) ?? gig.skillRequired ?? gig.requiredSkill ?? "",
+  );
+  const suggested = new Set(gig.gsinCandidates ?? []);
+  const list = (tasks ?? []).filter((t) => {
+    const needle = q.trim().toLowerCase();
+    return !needle || `${t.name} ${t.gsins} ${label(t)}`.toLowerCase().includes(needle);
+  }).sort((a, b) => Number(suggested.has(b.id)) - Number(suggested.has(a.id)));
+
+  const save = async () => {
+    if (!picked) return;
+    setSaving(true);
+    try {
+      const r = await assignGigTaskType({ collection: GIG_CODE_COLLECTION[gig.gigType], gigId: gig.id, taskTypeId: picked });
+      toast.success("Codes assigned", r.gsku ? `${r.gsins} · ${r.gsku}` : undefined);
+      onAssigned({ taskTypeId: picked, gsins: r.gsins, gsku: r.gsku });
+    } catch (err) {
+      toast.error("Couldn't assign", callableError(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open onClose={saving ? () => {} : onClose} size="md" title={gig.gsku ? "Change task type" : "Assign task type"}
+      footer={<>
+        <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button onClick={save} loading={saving} disabled={!picked || picked === gig.taskTypeId || saving}>
+          {gig.gsku ? "Re-assign codes" : "Assign codes"}
+        </Button>
+      </>}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+          <b style={{ color: "var(--text-primary)" }}>{gig.title || "Untitled Gig"}</b> · {GIG_TYPE_LABELS[gig.gigType]}
+          {gigSkill && <div style={{ marginTop: 4, fontSize: 12 }}>Skill: <b>{gigSkill}</b>{suggested.size > 1 ? ` — linked to ${suggested.size} task types, suggested below` : ""}</div>}
+          {gig.gsku && <div style={{ marginTop: 4, fontSize: 12 }}>Current: <span className="lg-code">{gig.gsins} · {gig.gsku}</span> — re-assigning gives it a new GSKU (the old one is kept in its history).</div>}
+        </div>
+        <input
+          placeholder="Search task types…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--text-primary)", fontFamily: "inherit", fontSize: 13 }}
+        />
+        <div style={{ maxHeight: 300, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
+          {loadError ? <div style={{ padding: 12, fontSize: 12, color: "var(--red)" }}>{loadError}</div>
+            : tasks == null ? <div style={{ padding: 12, fontSize: 12, color: "var(--text-muted)" }}>Loading…</div>
+            : list.length === 0 ? (
+              <div style={{ padding: 12, fontSize: 12, color: "var(--text-muted)" }}>
+                {tasks.length === 0 ? <>No task types yet — add them in <a href="/library-gsin" style={{ color: "var(--blue)" }}>GSIN Library</a>.</> : "No match."}
+              </div>
+            ) : list.map((t) => (
+              <label key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", cursor: "pointer", borderBottom: "1px solid var(--border)", background: picked === t.id ? "var(--blue-dim)" : "transparent" }}>
+                <input type="radio" name="gsin-task" checked={picked === t.id} onChange={() => setPicked(t.id)} />
+                <span className="lg-code" style={{ minWidth: 92 }}>{t.gsins}</span>
+                <span style={{ flex: 1, fontSize: 13, color: "var(--text-primary)" }}>
+                  {t.name}
+                  {suggested.has(t.id) && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "var(--blue)" }}>SUGGESTED</span>}
+                  <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>{label(t)}</span>
+                </span>
+              </label>
+            ))}
+        </div>
+      </div>
+    </Modal>
+  );
+}

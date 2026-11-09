@@ -3,12 +3,30 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  LayoutDashboard, Users, Shield,
-  Settings, LogOut, ChevronLeft, ChevronRight, Activity,
-  Map, MegaphoneIcon, File, BadgeCheck,
-  ClipboardList, Zap, Wrench, Gift, Headphones, BarChart3, Flag,
+  LayoutDashboard,
+  Users,
+  Shield,
+  Settings,
+  LogOut,
+  ChevronLeft,
+  ChevronRight,
+  Activity,
+  Map,
+  MegaphoneIcon,
+  File,
+  BadgeCheck,
+  ClipboardList,
+  Zap,
+  Wrench,
+  Gift,
+  Headphones,
+  BarChart3,
+  Flag,
   LucideIcon,
-  Filter, Coins, Wallet,
+  Filter,
+  Coins,
+  Wallet,
+  ListTree,
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import type { AdminUser } from "@/context/AuthContext";
@@ -53,6 +71,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/live-gigs",  icon: ClipboardList, label: "Gigs",                      module: "live-gigs" },
       { href: "/quick-gigs", icon: Zap,            label: "Quick Gigs Configuration",  module: "quick-gigs" },
+      { href: "/library-gsin", icon: ListTree,     label: "GSIN Library",              module: "library-gsin" },
     ],
   },
   {
@@ -255,7 +274,7 @@ export default function Sidebar({ collapsed, onToggle, user }: SidebarProps) {
             {!collapsed && <div className="sb-section-label">{group.label}</div>}
             {group.items.map((item) => (
               <SidebarItem key={item.href} href={item.href} icon={item.icon}
-                label={item.label} collapsed={collapsed} badge={badges[item.module]} />
+                label={item.label} collapsed={collapsed} badge={item.href === "/library-gsin" ? undefined : badges[item.module]} />
             ))}
           </div>
         ))}
