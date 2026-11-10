@@ -11,7 +11,7 @@ interface ModalProps {
   description?: string;
   children?: React.ReactNode;
   footer?: React.ReactNode;
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "xl";
   bodyStyle?: React.CSSProperties;
 }
 
@@ -37,7 +37,7 @@ export default function Modal({
 
   if (!open) return null;
 
-  const widths = { sm: 400, md: 520, lg: 680 };
+  const widths = { sm: 400, md: 520, lg: 680, xl: 960 };
 
   return (
     <div className="modal-overlay" onClick={onClose}>

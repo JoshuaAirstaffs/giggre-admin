@@ -24,6 +24,7 @@ import {
 import { db, auth } from "@/lib/firebase";
 import { writeLog, buildDescription } from "@/lib/activitylog";
 import EarningLimitField from "./EarningLimitField";
+import BulkAddUsersModal from "./BulkAddUsersModal";
 import {
   Search, ChevronDown, ChevronUp, X,
   Users, ArrowUpDown, ExternalLink, Clock, ShieldOff,
@@ -705,6 +706,7 @@ function UsersPageInner() {
   const [drStatusFilter, setDrStatusFilter] = useState<"all" | "pending_deletion" | "approved" | "cancelled" | "completed">("all");
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [createForm, setCreateForm] = useState({ name: "", email: "", phone: "", password: "", role: "user", pendingDeletion: false, scheduledDeleteAt: "" });
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError]     = useState<string | null>(null);
@@ -1522,6 +1524,9 @@ function UsersPageInner() {
                   </div>
                 )}
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                  <Button variant="primary" size="sm" icon={UserPlus} onClick={() => setBulkAddOpen(true)}>
+                    Add Users
+                  </Button>
                   {/* <Button
                     variant="primary"
                     size="sm"
@@ -2376,6 +2381,8 @@ function UsersPageInner() {
           )}
         </Modal>
       )}
+
+      <BulkAddUsersModal open={bulkAddOpen} onClose={() => setBulkAddOpen(false)} />
 
       {/* Create User modal */}
       <Modal
