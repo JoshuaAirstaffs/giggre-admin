@@ -27,6 +27,7 @@ import {
   Coins,
   Wallet,
   ListTree,
+  TicketPercent,
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import type { AdminUser } from "@/context/AuthContext";
@@ -90,6 +91,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Communication",
     items: [
       { href: "/announcements", icon: MegaphoneIcon, label: "Announcements", module: "announcements" },
+      { href: "/promotions",    icon: TicketPercent, label: "Promotions",    module: "promotions" },
       { href: "/support",       icon: Headphones,    label: "Support",       module: "reports" },
     ],
   },
