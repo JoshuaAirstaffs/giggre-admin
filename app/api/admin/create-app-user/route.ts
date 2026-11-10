@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { FieldValue, GeoPoint, Timestamp } from "firebase-admin/firestore";
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,7 +17,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const { email, name, phone, password, role, pendingDeletion, scheduledDeleteAt } = await req.json();
+    const { email, name, phone, password, role, pendingDeletion, scheduledDeleteAt, location } = await req.json();
+
+    // Optional { lat, lng } → GeoPoint (same shape the app writes to users.location)
+    let geo: GeoPoint | null = null;
+    if (location != null) {
+      const lat = Number(location.lat);
+      const lng = Number(location.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        return NextResponse.json({ error: "Invalid latitude/longitude." }, { status: 400 });
+      }
+      geo = new GeoPoint(lat, lng);
+    }
 
     // Build Firebase Auth user — all fields optional for testing
     const authPayload: Record<string, any> = {};
@@ -44,7 +55,7 @@ export async function POST(req: NextRequest) {
       autoAccept:                false,
       availableForGigs:          false,
       decline_count:             0,
-      location:                  null,
+      location:                  geo,
       openGigsUnlocked:          false,
       ratingAsHost:              0,
       ratingAsWorker:            0,
@@ -82,7 +93,7 @@ export async function POST(req: NextRequest) {
       meta: {
         from:  null,
         to:    null,
-        other: { email, phone, role: role || "user", authMethod: "email_password" },
+        other: { email: email || null, phone: phone || null, role: role || "user", authMethod: "email_password", location: geo ? { lat: geo.latitude, lng: geo.longitude } : null },
       },
       createdAt: FieldValue.serverTimestamp(),
     });
