@@ -21,7 +21,7 @@ import {
 // Promotions — promo codes users redeem in the app / website (Profile →
 // Promo code). Three kinds: Gig Points, Gig Wallet credit, and a cashback
 // voucher paid on the host's next completed gig. Access levels: public
-// (anyone; optionally listed in the app), private (a targeted group — "Send
+// (anyone — shared on social media / the website), private (a targeted group — "Send
 // to group" delivers it), restricted (single-use, one per chosen user). Server side:
 // giggre_app functions/src/promos.ts.
 
@@ -201,7 +201,7 @@ function PromotionsPage() {
                           <div className="gp-sub">{c.name}</div>
                           <span className={`pr-access ${c.access}`}>
                             {c.access === "public" ? <Globe size={10} /> : c.access === "private" ? <Users size={10} /> : <Lock size={10} />}
-                            {ACCESS_LABEL[c.access]}{c.access === "public" && c.listed ? " · listed" : ""}
+                            {ACCESS_LABEL[c.access]}
                           </span>
                         </td>
                         <td>
@@ -309,7 +309,6 @@ function PromoEditor({ initial, restricted = false, onClose }: { initial: PromoC
   // Restricted: making new per-user codes, or editing one of them.
   const isRestricted = restricted || initial?.access === "restricted";
   const [access, setAccess] = useState<PromoAccess>(initial?.access ?? "public");
-  const [listed, setListed] = useState(initial?.listed ?? false);
   const [prefix, setPrefix] = useState("VIP");
   const [note, setNote] = useState("");
   const [users, setUsers] = useState<PromoUser[]>([]);
@@ -361,7 +360,7 @@ function PromoEditor({ initial, restricted = false, onClose }: { initial: PromoC
   const save = async () => {
     const input: PromoInput = {
       code: code.trim().toUpperCase(), editing, name: name.trim(), description: description.trim(), type,
-      access: isRestricted ? "restricted" : access, listed: !isRestricted && access === "public" && listed,
+      access: isRestricted ? "restricted" : access, listed: false,
       maxRedemptions: numOrNull(maxRedemptions),
       startsAt: startsAt ? new Date(startsAt).getTime() : null,
       endsAt: endsAt ? new Date(endsAt).getTime() : null,
@@ -459,12 +458,6 @@ function PromoEditor({ initial, restricted = false, onClose }: { initial: PromoC
               ))}
             </div>
             <div className="gp-sub" style={{ marginTop: 4 }}>{ACCESS_HINT[access]}</div>
-            {access === "public" && (
-              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 13, color: "var(--text-secondary)" }}>
-                <input type="checkbox" checked={listed} onChange={(e) => setListed(e.target.checked)} />
-                Show it in the app &amp; website under &quot;Available promos&quot;
-              </label>
-            )}
           </div>
         )}
         {restricted && (

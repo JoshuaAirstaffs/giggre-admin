@@ -91,7 +91,7 @@ export const ACCESS_LABEL: Record<PromoAccess, string> = {
   restricted: "Restricted",
 };
 export const ACCESS_HINT: Record<PromoAccess, string> = {
-  public: "Anyone can use it — share it on social media or the website. Optionally list it in the app.",
+  public: "Anyone can use it — share it on social media or the website.",
   private: "Only a targeted group (e.g. new users, verified hosts) can use it. Send it to the group from the list.",
   restricted: "Single-use codes made for specific users — apologies, VIP rewards. Each user gets their own code.",
 };
