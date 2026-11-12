@@ -12,9 +12,11 @@ import { db } from "@/lib/firebase";
 import { writeLog } from "@/lib/activitylog";
 import { callableError } from "@/lib/gigPoints";
 import { GP_STYLES } from "../gig-points/styles";
+import { IconGlyph, IconPickerModal } from "@/components/ui/IconPickerModal";
+import { iconLabel } from "@/lib/iconify";
 import {
   createCategory, createSkill, createSubcategory, createTaskType, deleteCategory, deleteSubcategory, deleteTaskType,
-  clearLegacySkillLinks, renameCategory, renameSubcategory, updateTaskType, watchGsinCatalog,
+  clearLegacySkillLinks, renameCategory, renameSubcategory, setSubcategoryIcon, updateTaskType, watchGsinCatalog,
   type GsinCategory, type GsinSubcategory, type GsinTaskType,
 } from "@/lib/gsin";
 
@@ -46,6 +48,7 @@ export default function GsinLibraryPage() {
   const [subId, setSubId] = useState<string | null>(null);
   const [modal, setModal] = useState<null | "cat" | "sub" | "task">(null);
   const [editTask, setEditTask] = useState<GsinTaskType | null>(null);
+  const [iconFor, setIconFor] = useState<GsinSubcategory | null>(null);
   const [confirmDel, setConfirmDel] = useState<null | { kind: "cat" | "sub" | "task"; id: string; label: string }>(null);
   const [busy, setBusy] = useState(false);
 
@@ -130,6 +133,7 @@ export default function GsinLibraryPage() {
         .gl-chips { display: flex; flex-wrap: wrap; gap: 4px; }
         .gl-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-secondary); }
         .gl-icon { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 6px; display: inline-flex; }
+        .gl-icon-box { width: 38px; height: 38px; border-radius: 9px; display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-primary); flex-shrink: 0; }
         .gl-icon:hover { color: var(--text-primary); background: var(--bg-hover); }
         .gl-format { font-size: 12px; color: var(--text-muted); line-height: 1.7; }
         .gl-format code { font-family: monospace; color: var(--text-primary); background: var(--bg-elevated); padding: 1px 5px; border-radius: 4px; }
@@ -181,12 +185,25 @@ export default function GsinLibraryPage() {
                   : catSubs.length === 0 ? <div className="gp-sub">No sub-categories in {cat.name} yet.</div>
                   : catSubs.map((s) => (
                     <button key={s.id} className={`gl-item ${sub?.id === s.id ? "active" : ""}`} onClick={() => setSubId(s.id)}>
+                      <IconGlyph icon={s.icon} size={16} title={s.icon ? iconLabel(s.icon) : "No icon yet"} />
                       <span className="gl-prefix">{s.prefix}</span>
                       <span style={{ flex: 1 }}>{s.name}</span>
                       <span className="gp-sub">{tasks.filter((t) => t.subcategoryId === s.id).length}</span>
                     </button>
                   ))}
               </div>
+              {sub && (
+                <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
+                  <div className="gl-icon-box"><IconGlyph icon={sub.icon} size={22} /></div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>Icon</div>
+                    <div className="gp-sub" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {sub.icon ? iconLabel(sub.icon) : "None yet. Skills in it show no icon."}
+                    </div>
+                  </div>
+                  <button className="gl-icon" onClick={() => setIconFor(sub)}><Pencil size={13} /> <span style={{ fontSize: 12, marginLeft: 4 }}>{sub.icon ? "Change" : "Choose"}</span></button>
+                </div>
+              )}
               {sub && (
                 <RenameRow key={sub.id} label="Sub-category name" value={sub.name}
                   onSave={async (v) => { await renameSubcategory(sub.id, v); await log("gsin_renamed", `Renamed sub-category ${sub.prefix} to ${v}`, sub.id); }}
@@ -254,6 +271,24 @@ export default function GsinLibraryPage() {
         <TaskModal sub={sub} cat={cat} skills={skillList} taskName={taskName} skillsLoading={skills == null} skillsError={skillsError} taken={(p) => tasks.some((t) => t.id === `${sub.id}${p}`)}
           nextGsins={`G${cat.prefix}${String(cat.gsinsSeq + 1).padStart(6, "0")}`}
           onClose={() => setModal(null)} />
+      )}
+      {iconFor && (
+        <IconPickerModal
+          key={iconFor.id}
+          title={`Icon for ${iconFor.name} (${iconFor.prefix})`}
+          initialQuery={iconFor.name}
+          value={iconFor.icon}
+          onClose={() => setIconFor(null)}
+          onSave={async (icon) => {
+            try {
+              await setSubcategoryIcon(iconFor.id, icon);
+              await log("gsin_icon_set", icon ? `Set icon of sub-category ${iconFor.prefix} ${iconFor.name} to ${icon}` : `Removed icon of sub-category ${iconFor.prefix} ${iconFor.name}`, iconFor.id);
+              toast.success(icon ? "Icon saved" : "Icon removed", iconFor.name);
+            } catch (e) {
+              toast.error("Couldn't save the icon", err(e));
+              throw e;
+            }
+          }} />
       )}
       {editTask && (
         <EditTaskModal task={editTask} skills={skillList} taskName={taskName} skillsLoading={skills == null} skillsError={skillsError} uid={user.uid} onClose={() => setEditTask(null)} skillName={skillName} />

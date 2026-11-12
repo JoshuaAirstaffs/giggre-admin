@@ -136,12 +136,28 @@ export type LogModule =
 
 export type ContentSectionKey =
   | "carousel_items"
+  | "worker_carousel_items"
+  | "host_carousel_items"
   | "updates"
   | "about_giggre"
   | "terms_and_conditions"
   | "privacy"
   | "help_faq"
   | "tutorial_videos";
+
+/**
+ * The app has three carousels, each its own app_content doc:
+ * Home (carousel_items), Gig Worker and Gig Host.
+ */
+export const CAROUSEL_SECTION_KEYS = ["carousel_items", "worker_carousel_items", "host_carousel_items"] as const;
+export type CarouselSectionKey = (typeof CAROUSEL_SECTION_KEYS)[number];
+export function isCarouselSection(key: ContentSectionKey): key is CarouselSectionKey {
+  return (CAROUSEL_SECTION_KEYS as readonly string[]).includes(key);
+}
+/** Only the Home carousel sits next to the Gig Worker / Gig Host buttons. */
+export function hasRoleHighlight(key: ContentSectionKey): boolean {
+  return key === "carousel_items";
+}
 
 // ─── Unified Log Params ───────────────────────────────────────────────────────
 

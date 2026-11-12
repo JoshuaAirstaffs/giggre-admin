@@ -17,6 +17,8 @@ import {
   emptyItemForSection,
   getItemTitle,
   hasCategories,
+  CAROUSEL_AUDIENCES,
+  slideAudience,
   type ContentItem,
   type SectionOptions,
   type SectionData,
@@ -25,11 +27,12 @@ import { AboutGiggrePanel } from "@/components/ui/content/AboutGiggrePanel";
 import { TutorialVideosPanel } from "@/components/ui/content/TutorialVideosPanel";
 import { ImageUploadField } from "@/components/ui/content/ImageUploadField";
 import { VideoUploadField } from "@/components/ui/content/VideoUploadField";
-import { CarouselPreview } from "@/components/ui/content/CarouselPreview";
-import { slideCountries, coversAllCountries } from "@/lib/carouselCountries";
+import { CarouselPreview, SHAPE_ADVICE, type CarouselShape } from "@/components/ui/content/CarouselPreview";
+import { slideCountries, coversAllCountries, countryByCode } from "@/lib/carouselCountries";
 import { CountrySummary, CountryPickerModal } from "@/components/ui/content/CountryPicker";
 import { deleteOwnedImage } from "@/lib/storageCleanup";
 import type { ContentSectionKey } from "@/lib/activitylog";
+import { isCarouselSection, hasRoleHighlight, CAROUSEL_SECTION_KEYS, type CarouselSectionKey } from "@/lib/activitylog";
 import {
   Plus, Edit2, Trash2, Settings, Tag, Shuffle,
   Image, HelpCircle, Shield, ScrollText, Info, RefreshCw,
@@ -57,6 +60,14 @@ const SECTIONS: {
 
 const SECTION_KEYS = SECTIONS.map((s) => s.key);
 
+// The Carousel tab holds the app's three carousels, each its own section.
+const CAROUSEL_TABS: { key: CarouselSectionKey; tab: string; label: string; description: string }[] = [
+  { key: "carousel_items",        tab: "Home",       label: "Carousel (Home)",       description: "Home screen carousel, next to the Gig Worker / Gig Host buttons" },
+  { key: "worker_carousel_items", tab: "Gig Worker", label: "Carousel (Gig Worker)", description: "Carousel in the Gig Worker side of the app" },
+  { key: "host_carousel_items",   tab: "Gig Host",   label: "Carousel (Gig Host)",   description: "Carousel in the Gig Host side of the app" },
+];
+const CAROUSEL_TAB_KEY = "cm_carousel_tab";
+
 // Sections with their own panel (not the generic item editor).
 const CUSTOM_SECTIONS: ContentSectionKey[] = ["about_giggre", "tutorial_videos"];
 const ITEM_BASED_SECTIONS = SECTION_KEYS.filter((k) => !CUSTOM_SECTIONS.includes(k));
@@ -78,6 +89,10 @@ const PREDEFINED_CATEGORIES: string[] = [
 ];
 
 function getSectionMeta(key: ContentSectionKey) {
+  const carousel = CAROUSEL_TABS.find((c) => c.key === key);
+  if (carousel) {
+    return { ...SECTIONS.find((s) => s.key === "carousel_items")!, key, label: carousel.label, description: carousel.description };
+  }
   return SECTIONS.find((s) => s.key === key)!;
 }
 
@@ -324,19 +339,19 @@ function ItemForm({
   }, []);
 
   const currentSortTaken =
-    sectionKey === "carousel_items" &&
+    isCarouselSection(sectionKey) &&
     form.sortNumber > 0 &&
     takenSortNumbers.filter(n => n !== (isEdit ? initial.sortNumber : null)).includes(form.sortNumber);
 
   // A carousel slide needs an image or a video to show; with neither it can
   // still be saved, but only as hidden (sort 0)
   const hasMedia = (f: any) => !!f.picture?.trim() || !!f.video?.trim();
-  const carouselNoImage = sectionKey === "carousel_items" && !hasMedia(form);
+  const carouselNoImage = isCarouselSection(sectionKey) && !hasMedia(form);
   const lastSortRef = useRef<number>(0);
   const setMedia = (key: "picture" | "video", url: string) =>
     setForm((prev: any) => {
       const next = { ...prev, [key]: url };
-      if (sectionKey !== "carousel_items") return next;
+      if (!isCarouselSection(sectionKey)) return next;
       if (hasMedia(prev) && !hasMedia(next)) {
         if (prev.sortNumber > 0) lastSortRef.current = prev.sortNumber;
         return { ...next, sortNumber: 0 };
@@ -357,13 +372,17 @@ function ItemForm({
     setMediaType(t);
     setImageValid(true);
     setMedia(t === "video" ? "picture" : "video", "");
+    if (t === "image" && slideAudience(form)) set("audience", null); // images have no button
   };
 
-  const countries: string[] = sectionKey === "carousel_items" ? slideCountries(form) : [];
+  const countries: string[] = isCarouselSection(sectionKey) ? slideCountries(form) : [];
+  // Home is 16:9; the Gig Worker / Gig Host carousels are a 140px-tall banner
+  const carouselShape: CarouselShape = sectionKey === "carousel_items" ? "home" : "banner";
   const [countryPickerOpen, setCountryPickerOpen] = useState(false);
+  const audience = slideAudience(form);
 
   const canSubmit =
-    sectionKey === "carousel_items"
+    isCarouselSection(sectionKey)
       ? !!form.imageName?.trim() && !currentSortTaken && imageValid && countries.length > 0
       : !!form.title?.trim();
 
@@ -398,7 +417,7 @@ function ItemForm({
         .if-media-tip-meta { margin-top: 3px; font-size: 11px; color: var(--text-muted); }
       `}</style>
 
-      {sectionKey === "carousel_items" && (
+      {isCarouselSection(sectionKey) && (
         <>
           <div>
             <div className="if-media-head">
@@ -423,8 +442,8 @@ function ItemForm({
             <div className="if-media-tip">
               <InfoIcon size={14} />
               <div>
-                <b>Best fit: 16:9 landscape</b> — {mediaType === "image" ? "1920×1080 px" : "1920×1080 (1080p)"} recommended, or 1280×720.
-                Other shapes are cropped to fill the slide, so keep text and faces in the middle.
+                <b>Best fit: {SHAPE_ADVICE[carouselShape].best}</b> — {SHAPE_ADVICE[carouselShape][mediaType]}.{" "}
+                {SHAPE_ADVICE[carouselShape].tip}
                 <div className="if-media-tip-meta">
                   {mediaType === "image"
                     ? "JPG, PNG or WebP · up to 5 MB"
@@ -470,7 +489,7 @@ function ItemForm({
             // How the slide will look in the app, before saving
             const src = mediaType === "image" ? form.picture?.trim() : form.video?.trim();
             if (!src || busy || (mediaType === "image" && !imageValid)) return null;
-            return <CarouselPreview key={`${mediaType}:${src}`} kind={mediaType} src={src} />;
+            return <CarouselPreview key={`${mediaType}:${src}`} kind={mediaType} src={src} shape={carouselShape} />;
           })()}
           <div>
             <div className="if-media-head">
@@ -494,6 +513,31 @@ function ItemForm({
               onApply={(codes) => set("countries", codes)}
             />
           </div>
+          {mediaType === "video" && hasRoleHighlight(sectionKey) && <div>
+            <div className="if-media-head">
+              <label className="if-label" style={{ marginBottom: 0 }}>Plays when highlighted</label>
+              <div className="if-media-switch" role="radiogroup" aria-label="Plays when highlighted">
+                {[{ value: null, label: "None" }, ...CAROUSEL_AUDIENCES].map((a) => (
+                  <button
+                    key={a.value ?? "none"}
+                    type="button"
+                    role="radio"
+                    aria-checked={audience === a.value}
+                    className={audience === a.value ? "active" : ""}
+                    onClick={() => set("audience", a.value)}
+                    disabled={loading}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="if-sort-hint">
+              {audience
+                ? CAROUSEL_AUDIENCES.find((a) => a.value === audience)?.hint
+                : "Plays only in the normal carousel rotation. No button jumps to it."}
+            </div>
+          </div>}
           <div>
             <label className="if-label">Image Name *</label>
             <input className="if-input" value={form.imageName ?? ""} onChange={(e) => set("imageName", e.target.value)} disabled={loading} placeholder="Display name for this carousel item…" />
@@ -525,13 +569,13 @@ function ItemForm({
         </div>
       )}
 
-      {sectionKey !== "carousel_items" && (
+      {!isCarouselSection(sectionKey) && (
         <div>
           <label className="if-label">Title *</label>
           <input className="if-input" value={form.title ?? ""} onChange={(e) => set("title", e.target.value)} disabled={loading} placeholder="Title…" />
         </div>
       )}
-      {sectionKey !== "carousel_items" && (
+      {!isCarouselSection(sectionKey) && (
         <div>
           <label className="if-label">Body Text</label>
           <textarea className="if-textarea" style={{ minHeight: 140 }} value={form.body ?? ""} onChange={(e) => set("body", e.target.value)} disabled={loading} placeholder="Body content…" />
@@ -569,7 +613,7 @@ function ItemForm({
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 4 }}>
         <Button variant="primary" size="sm" loading={loading} onClick={() => {
-          const data = sectionKey === "carousel_items"
+          const data = isCarouselSection(sectionKey)
             ? (mediaType === "video" ? { ...form, picture: "" } : { ...form, video: "" })
             : form;
           savedPictureRef.current = data.picture || null;
@@ -779,7 +823,7 @@ function SectionSettingsForm({
         <label className="sf-label">Max Visible Items</label>
         <input className="sf-input" type="number" min={0} value={opts.maxVisibleItems ?? 0} onChange={(e) => set("maxVisibleItems", parseInt(e.target.value) || 0)} placeholder="0 = show all" />
       </div>
-      {sectionKey === "carousel_items" && (
+      {isCarouselSection(sectionKey) && (
         <>
           <label className="sf-toggle"><span className="sf-toggle-label">Autoplay</span><input type="checkbox" checked={!!opts.autoplay} onChange={(e) => set("autoplay", e.target.checked)} /></label>
           <div>
@@ -818,7 +862,9 @@ function SectionPanel({
   const [editing, setEditing] = useState<ContentItem | null>(null);
   const [deleting, setDeleting] = useState<ContentItem | null>(null);
   const [shuffling, setShuffling] = useState(false);
+  const [replacing, setReplacing] = useState<{ form: Partial<ContentItem>; mode: "create" | "edit"; conflicts: { item: ContentItem; overlap: string[]; keep: string[] }[] } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [confirmHide, setConfirmHide] = useState(false);
   const [catMgrOpen, setCatMgrOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -830,7 +876,7 @@ function SectionPanel({
       : [];
 
   const takenSortNumbers =
-    sectionKey === "carousel_items" && sectionState.data
+    isCarouselSection(sectionKey) && sectionState.data
       ? sectionState.data.items
           .map(item => (item as any).sortNumber)
           .filter(n => n > 0)
@@ -865,14 +911,60 @@ function SectionPanel({
     setCurrentPage(1);
   };
 
+  // One video per role button per country: a published Gig Worker / Gig Host
+  // video slide takes that button over. Older videos for the same button in
+  // any of its countries lose their button (all countries — a slide has one
+  // button) but stay in the carousel's normal rotation.
+  type RoleConflict = { item: ContentItem; overlap: string[]; keep: string[] };
+  const roleVideoConflicts = (form: Partial<ContentItem>, selfId?: string): RoleConflict[] => {
+    if (!hasRoleHighlight(sectionKey) || !videoOf(form) || (form.sortNumber ?? 0) <= 0) return [];
+    const audience = slideAudience(form);
+    if (!audience) return [];
+    const countries = slideCountries(form);
+    return data.items
+      .filter((item) => item.id !== selfId && item.sortNumber > 0 && !!videoOf(item) && slideAudience(item) === audience)
+      .map((item) => {
+        const theirs = slideCountries(item);
+        return { item, overlap: theirs.filter((c) => countries.includes(c)), keep: theirs.filter((c) => !countries.includes(c)) };
+      })
+      .filter((c) => c.overlap.length > 0);
+  };
+
+  const countryList = (codes: string[]) => codes.map((c) => countryByCode(c)?.name ?? c).join(", ");
+
+  const applyReplaced = async (conflicts: RoleConflict[]): Promise<boolean> => {
+    for (const { item } of conflicts) {
+      const result = await updateItem(sectionKey, meta.label, item, { audience: null } as Partial<ContentItem>);
+      if (!result.success) {
+        toast.error(`Couldn't update "${getItemTitle(item, sectionKey)}"`, result.error);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const confirmReplace = async () => {
+    if (!replacing) return;
+    const { form, mode, conflicts } = replacing;
+    if (!(await applyReplaced(conflicts))) return;
+    setReplacing(null);
+    if (mode === "create") await saveCreate(form);
+    else await saveEdit(form);
+  };
+
   const handleCreate = async (form: Partial<ContentItem>) => {
-    if (sectionKey === "carousel_items" && (form.sortNumber ?? 0) > 0) {
+    if (isCarouselSection(sectionKey) && (form.sortNumber ?? 0) > 0) {
       if (takenSortNumbers.includes(form.sortNumber ?? 0)) {
         toast.error("Invalid sort number", "This sort number is already taken");
         return;
       }
     }
+    const conflicts = roleVideoConflicts(form);
+    if (conflicts.length) { setReplacing({ form, mode: "create", conflicts }); return; }
+    await saveCreate(form);
+  };
 
+  const saveCreate = async (form: Partial<ContentItem>) => {
     const result = await createItem(sectionKey, meta.label, form);
     if (result.success) {
       toast.success("Item created", meta.label);
@@ -886,14 +978,20 @@ function SectionPanel({
   const handleEdit = async (form: Partial<ContentItem>) => {
     if (!editing) return;
 
-    if (sectionKey === "carousel_items" && (form.sortNumber ?? 0) > 0) {
+    if (isCarouselSection(sectionKey) && (form.sortNumber ?? 0) > 0) {
       const sortNumberTaken = takenSortNumbers.filter(n => n !== editing.sortNumber).includes(form.sortNumber ?? 0);
       if (sortNumberTaken) {
         toast.error("Invalid sort number", "This sort number is already taken");
         return;
       }
     }
+    const conflicts = roleVideoConflicts({ ...editing, ...form }, editing.id);
+    if (conflicts.length) { setReplacing({ form, mode: "edit", conflicts }); return; }
+    await saveEdit(form);
+  };
 
+  const saveEdit = async (form: Partial<ContentItem>) => {
+    if (!editing) return;
     const result = await updateItem(sectionKey, meta.label, editing, form);
     if (result.success) {
       // The replaced / removed image is no longer referenced anywhere
@@ -949,6 +1047,19 @@ function SectionPanel({
     }
   };
 
+  // Whole-carousel visibility in the app. Slides and their settings are kept.
+  const carouselHidden = isCarouselSection(sectionKey) && !!data.options.hidden;
+  const setCarouselHidden = async (hidden: boolean) => {
+    const result = await saveSettings(sectionKey, meta.label, { ...data.options, hidden }, data.options);
+    if (result.success) {
+      toast.success(hidden ? "Carousel hidden" : "Carousel shown", meta.label);
+      setConfirmHide(false);
+      onRefresh();
+    } else {
+      toast.error(hidden ? "Couldn't hide the carousel" : "Couldn't show the carousel", result.error);
+    }
+  };
+
   const handleSaveCategories = async (categories: string[]) => {
     const previous = data.categories ?? PREDEFINED_CATEGORIES;
     const result = await saveCategories(sectionKey, meta.label, categories, previous);
@@ -989,6 +1100,14 @@ function SectionPanel({
         .cm-icon-btn.danger:hover { background: var(--red-dim); color: var(--red); border-color: rgba(239,68,68,0.25); }
         .cm-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .cm-empty { padding: 36px; text-align: center; color: var(--text-muted); font-size: 13px; }
+        .sp-vis { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px 5px 6px; font-size: 12px; font-weight: 600; font-family: inherit; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 20px; cursor: pointer; white-space: nowrap; }
+        .sp-vis.on { color: var(--text-secondary); }
+        .sp-vis:disabled { opacity: 0.6; cursor: not-allowed; }
+        .sp-vis-track { position: relative; width: 28px; height: 16px; border-radius: 10px; background: var(--bg-hover); border: 1px solid var(--border); transition: background 0.15s; }
+        .sp-vis.on .sp-vis-track { background: var(--green, #22c55e); border-color: transparent; }
+        .sp-vis-thumb { position: absolute; top: 1px; left: 1px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.3); transition: transform 0.15s; }
+        .sp-vis.on .sp-vis-thumb { transform: translateX(12px); }
+        .sp-hidden-note { margin-bottom: 14px; padding: 10px 12px; font-size: 12.5px; color: var(--text-secondary); background: var(--bg-elevated); border: 1px dashed var(--border); border-radius: var(--radius-sm); }
         .sp-refreshing { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); }
         .spin-anim { animation: sp-spin 0.9s linear infinite; }
         @keyframes sp-spin { to { transform: rotate(360deg); } }
@@ -1009,7 +1128,20 @@ function SectionPanel({
               <RefreshCw size={11} className="spin-anim" /> Refreshing…
             </span>
           )}
-          <Badge variant="blue">{data.items.length} items</Badge>
+          {isCarouselSection(sectionKey) && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!carouselHidden}
+              className={`sp-vis${carouselHidden ? "" : " on"}`}
+              disabled={submitting}
+              onClick={() => (carouselHidden ? setCarouselHidden(false) : setConfirmHide(true))}
+              title={carouselHidden ? "Hidden in the app. Click to show it." : "Shown in the app. Click to hide it."}
+            >
+              <span className="sp-vis-track"><span className="sp-vis-thumb" /></span>
+              {carouselHidden ? "Hidden in app" : "Shown in app"}
+            </button>
+          )}
           {data.lastUpdated && (
             <span style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
               {formatDate(data.lastUpdated)}
@@ -1017,6 +1149,12 @@ function SectionPanel({
           )}
         </div>
       </div>
+
+      {carouselHidden && (
+        <div className="sp-hidden-note">
+          This carousel is hidden in the app. You can still edit its slides; nobody sees them until you switch it back on.
+        </div>
+      )}
 
       {/* Toolbar */}
       <div className="sp-toolbar">
@@ -1048,12 +1186,12 @@ function SectionPanel({
             <Tag size={13} />
           </button>
         )}
-        {sectionKey !== "carousel_items" && (
+        {!isCarouselSection(sectionKey) && (
           <button className="cm-icon-btn" title="Section settings" onClick={() => setSettingsOpen(true)}>
             <Settings size={13} />
           </button>
         )}
-        {sectionKey === "carousel_items" && (
+        {isCarouselSection(sectionKey) && (
           <Button
             variant="secondary"
             size="sm"
@@ -1077,7 +1215,8 @@ function SectionPanel({
             <tr>
               {hasCategories(sectionKey) && <th>Category</th>}
               <th>Content</th>
-              {sectionKey === "carousel_items" && <th>Countries</th>}
+              {isCarouselSection(sectionKey) && <th>Countries</th>}
+              {hasRoleHighlight(sectionKey) && <th>Highlight</th>}
               <th>Sort #</th>
               <th>Status</th>
               <th>Updated</th>
@@ -1087,7 +1226,7 @@ function SectionPanel({
           <tbody>
             {pagedItems.length === 0 ? (
               <tr>
-                <td colSpan={5 + (hasCategories(sectionKey) ? 1 : 0) + (sectionKey === "carousel_items" ? 1 : 0)} className="cm-empty">
+                <td colSpan={5 + (hasCategories(sectionKey) ? 1 : 0) + (isCarouselSection(sectionKey) ? 1 : 0) + (hasRoleHighlight(sectionKey) ? 1 : 0)} className="cm-empty">
                   No items found.{!search && ` Click "Add Item" to create the first one.`}
                 </td>
               </tr>
@@ -1103,8 +1242,21 @@ function SectionPanel({
                       {videoOf(item) && <Badge variant="purple">Video</Badge>}
                     </div>
                   </td>
-                  {sectionKey === "carousel_items" && (
+                  {isCarouselSection(sectionKey) && (
                     <td><CountrySummary codes={slideCountries(item)} compact /></td>
+                  )}
+                  {hasRoleHighlight(sectionKey) && (
+                    <td>
+                      {!videoOf(item) ? (
+                        <span style={{ color: "var(--text-muted)" }}>—</span>
+                      ) : slideAudience(item) ? (
+                        <Badge variant={slideAudience(item) === "worker" ? "blue" : "amber"}>
+                          {slideAudience(item) === "worker" ? "Gig Worker" : "Gig Host"}
+                        </Badge>
+                      ) : (
+                        <span style={{ color: "var(--text-muted)" }} title="No button jumps to this video; it plays in the normal rotation">None</span>
+                      )}
+                    </td>
                   )}
                   <td style={{ fontFamily: "'Space Mono', monospace" }}>{item.sortNumber}</td>
                   <td>
@@ -1157,6 +1309,38 @@ function SectionPanel({
           <ItemForm sectionKey={sectionKey} initial={editing} onSubmit={handleEdit} loading={submitting} isEdit takenSortNumbers={takenSortNumbers} availableCategories={availableCategories} />
         )}
       </Modal>
+
+      <ConfirmDialog
+        open={!!replacing}
+        onClose={() => setReplacing(null)}
+        onConfirm={confirmReplace}
+        title={`Replace the ${replacing && slideAudience(replacing.form) === "host" ? "Gig Host" : "Gig Worker"} video?`}
+        message={replacing ? `Tapping ${slideAudience(replacing.form) === "host" ? "Gig Host" : "Gig Worker"} will play ${getItemTitle(replacing.form, sectionKey) !== "(No name)" ? `"${getItemTitle(replacing.form, sectionKey)}"` : "this slide"} instead. The current ${slideAudience(replacing.form) === "host" ? "Gig Host" : "Gig Worker"} ${replacing.conflicts.length === 1 ? "video stays" : "videos stay"} in the carousel without the highlight:` : ""}
+        confirmLabel="Replace & save"
+        loading={submitting}
+      >
+        {replacing && (
+          <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 13, lineHeight: 1.6, color: "var(--text-secondary)" }}>
+            {replacing.conflicts.map(({ item, keep }) => (
+              <li key={item.id}>
+                <b style={{ color: "var(--text-primary)" }}>&ldquo;{getItemTitle(item, sectionKey)}&rdquo;</b>{" "}
+                ({countryList(slideCountries(item))}): Highlight changes to None.
+                {keep.length > 0 && <> It also stops being the {slideAudience(replacing.form) === "host" ? "Gig Host" : "Gig Worker"} video in {countryList(keep)}.</>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={confirmHide}
+        onClose={() => setConfirmHide(false)}
+        onConfirm={() => setCarouselHidden(true)}
+        title={`Hide ${meta.label}?`}
+        message="Nobody in the app will see this carousel until you show it again. The slides and their settings are kept."
+        confirmLabel="Hide carousel"
+        loading={submitting}
+      />
 
       <ConfirmDialog
         open={shuffling}
@@ -1226,6 +1410,23 @@ export default function ContentManagementPage() {
     content.fetchSection,
   );
 
+  // Which of the three carousels the Carousel tab shows (remembered per browser)
+  const [carouselTab, setCarouselTabState] = useState<CarouselSectionKey>("carousel_items");
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(CAROUSEL_TAB_KEY);
+      if (saved && (CAROUSEL_SECTION_KEYS as readonly string[]).includes(saved)) setCarouselTabState(saved as CarouselSectionKey);
+    } catch { /* storage blocked */ }
+  }, []);
+  const setCarouselTab = (key: CarouselSectionKey) => {
+    setCarouselTabState(key);
+    try { localStorage.setItem(CAROUSEL_TAB_KEY, key); } catch { /* storage blocked */ }
+  };
+  useEffect(() => {
+    if (activeTab === "carousel_items") fetchSection(carouselTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, carouselTab]);
+
   const handleTabChange = useCallback(
     (key: ContentSectionKey) => {
       setActiveTab(key);
@@ -1242,6 +1443,10 @@ export default function ContentManagementPage() {
     if (CUSTOM_SECTIONS.includes(s.key)) {
       return { ...s, count: undefined, loading: false };
     }
+    if (s.key === "carousel_items") {
+      // No count here: each inner carousel tab shows its own.
+      return { ...s, count: undefined, loading: CAROUSEL_SECTION_KEYS.some((k) => getSection(k).loading) };
+    }
     const state = getSection(s.key);
     return { ...s, count: state.data?.items.length, loading: state.loading };
   });
@@ -1254,6 +1459,10 @@ export default function ContentManagementPage() {
       <style>{`
         .cm-page { display: flex; flex-direction: column; gap: 14px; }
         .cm-tab-content { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; min-height: 320px; }
+        .cm-subtabs { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 18px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); max-width: 100%; overflow-x: auto; }
+        .cm-subtab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 16px; font-size: 12.5px; font-weight: 600; font-family: inherit; border: none; border-radius: 6px; color: var(--text-muted); background: none; cursor: pointer; white-space: nowrap; }
+        .cm-subtab:hover:not(.active) { color: var(--text-secondary); }
+        .cm-subtab.active { background: var(--bg-surface); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
       `}</style>
 
       <div className="cm-page">
@@ -1268,7 +1477,33 @@ export default function ContentManagementPage() {
             <TutorialVideosPanel actor={actor} />
           )}
 
-          {ITEM_BASED_SECTIONS.map((key) =>
+          {activeTab === "carousel_items" && (
+            <>
+              <div className="cm-subtabs" role="tablist" aria-label="Carousels">
+                {CAROUSEL_TABS.map((c) => (
+                    <button
+                      key={c.key}
+                      type="button"
+                      role="tab"
+                      aria-selected={carouselTab === c.key}
+                      className={`cm-subtab${carouselTab === c.key ? " active" : ""}`}
+                      onClick={() => setCarouselTab(c.key)}
+                    >
+                      {c.tab}
+                    </button>
+                ))}
+              </div>
+              <SectionPanel
+                key={carouselTab}
+                sectionKey={carouselTab}
+                sectionState={getSection(carouselTab)}
+                onRefresh={() => refreshSection(carouselTab)}
+                content={content}
+              />
+            </>
+          )}
+
+          {ITEM_BASED_SECTIONS.filter((key) => key !== "carousel_items").map((key) =>
             activeTab === key ? (
               <SectionPanel
                 key={key}

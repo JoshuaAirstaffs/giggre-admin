@@ -1,9 +1,10 @@
 import {
-  collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, updateDoc, where,
+  collection, deleteDoc, deleteField, doc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, Timestamp, updateDoc, where,
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import app, { db } from "@/lib/firebase";
 import { FUNCTIONS_REGION } from "@/lib/gigPoints";
+import { isIconName } from "@/lib/iconify";
 
 // ── GSIN Library (admin only) ─────────────────────────────────────────────────
 // Mirrors giggre_app functions/src/gsin.ts.
@@ -16,7 +17,8 @@ import { FUNCTIONS_REGION } from "@/lib/gigPoints";
 // callable (it assigns the GSINS); codes on gigs only by Cloud Functions.
 
 export interface GsinCategory { id: string; name: string; prefix: string; gsinsSeq: number }
-export interface GsinSubcategory { id: string; name: string; prefix: string; categoryId: string }
+/** icon: Iconify name ("material-symbols:pets", see lib/iconify.ts), shown for every skill under this sub-category. */
+export interface GsinSubcategory { id: string; name: string; prefix: string; categoryId: string; icon: string | null }
 export interface GsinTaskType {
   id: string; name: string; prefix: string; categoryId: string; subcategoryId: string;
   gsins: string; gskuSeq: number; skillIds: string[]; createdAt: Date | null;
@@ -47,7 +49,10 @@ export function watchGsinCatalog(onData: (c: {
     emit();
   }, onError);
   const u2 = onSnapshot(query(collection(db, "gsin_subcategories"), orderBy("prefix")), (snap) => {
-    subcategories = snap.docs.map((d) => ({ id: d.id, name: s(d.data().name), prefix: s(d.data().prefix) || d.id, categoryId: s(d.data().categoryId) }));
+    subcategories = snap.docs.map((d) => ({
+      id: d.id, name: s(d.data().name), prefix: s(d.data().prefix) || d.id, categoryId: s(d.data().categoryId),
+      icon: isIconName(d.data().icon) ? d.data().icon : null,
+    }));
     emit();
   }, onError);
   const u3 = onSnapshot(query(collection(db, "gsin_task_types"), orderBy("gsins")), (snap) => {
@@ -74,6 +79,8 @@ export const createSubcategory = (prefix: string, name: string, categoryId: stri
   setDoc(doc(db, "gsin_subcategories", prefix), { prefix, name: name.trim(), categoryId, createdAt: serverTimestamp(), createdBy: uid });
 export const renameSubcategory = (id: string, name: string) =>
   updateDoc(doc(db, "gsin_subcategories", id), { name: name.trim(), updatedAt: serverTimestamp() });
+export const setSubcategoryIcon = (id: string, icon: string | null) =>
+  updateDoc(doc(db, "gsin_subcategories", id), { icon: icon ?? deleteField(), updatedAt: serverTimestamp() });
 export const deleteSubcategory = (id: string) => deleteDoc(doc(db, "gsin_subcategories", id));
 
 export const updateTaskType = (id: string, data: { name?: string; skillIds?: string[] }, uid: string) =>

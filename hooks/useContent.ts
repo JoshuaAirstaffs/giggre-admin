@@ -12,10 +12,12 @@ import {
   getDoc,
   serverTimestamp,
   writeBatch,
+  deleteField,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { writeLog, buildDescription } from "@/lib/activitylog";
 import type { ContentSectionKey, LogPayload } from "@/lib/activitylog";
+import { isCarouselSection } from "@/lib/activitylog";
 import { countryByCode, slideCountries } from "@/lib/carouselCountries";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -35,7 +37,27 @@ export interface CarouselItem extends BaseItem {
   video?: string;
   /** ISO country codes this slide shows in; missing = every country. */
   countries?: string[];
+  /**
+   * Video slides only: the home-screen role button that plays this video.
+   * Highlighting that button jumps the carousel to the video and plays it from
+   * the start; afterwards the carousel moves on as normal. Every slide still
+   * shows in the normal rotation. Missing (no button) on images and on videos
+   * set to None — including ones whose button another video took over.
+   */
+  audience?: CarouselAudience | null;
 }
+
+export type CarouselAudience = "worker" | "host";
+export const CAROUSEL_AUDIENCES: { value: CarouselAudience; label: string; hint: string }[] = [
+  { value: "worker", label: "Gig Worker", hint: "Highlighting Gig Worker jumps to this video and plays it from the start, then the carousel continues as normal." },
+  { value: "host", label: "Gig Host", hint: "Highlighting Gig Host jumps to this video and plays it from the start, then the carousel continues as normal." },
+];
+/** The button that plays this slide, or null (images, older videos). */
+export function slideAudience(item: unknown): CarouselAudience | null {
+  const a = (item as { audience?: unknown } | null)?.audience;
+  return a === "worker" || a === "host" ? a : null;
+}
+const audienceName = (a: CarouselAudience | null) => (a ? CAROUSEL_AUDIENCES.find((x) => x.value === a)!.label : "none");
 
 export interface UpdateItem extends BaseItem {
   category: string;
@@ -87,6 +109,8 @@ export interface SectionOptions {
   showArrows?: boolean;
   showDots?: boolean;
   loop?: boolean;
+  /** Carousels: true hides the whole carousel in the app (slides are kept). */
+  hidden?: boolean;
 }
 
 export interface SectionData {
@@ -138,6 +162,7 @@ const visibility = (sort: number) => (sort > 0 ? `shown (#${sort})` : "hidden");
 export function describeCarouselCreate(form: Partial<CarouselItem>): string[] {
   const out = [form.video ? "video" : form.picture ? "image" : "no media"];
   out.push(`countries: ${countryNames(slideCountries(form))}`);
+  if (form.video) out.push(`plays on: ${audienceName(slideAudience(form))}`);
   out.push(visibility(Number(form.sortNumber ?? 1)));
   return out;
 }
@@ -153,6 +178,9 @@ export function describeCarouselChanges(item: CarouselItem, form: Partial<Carous
     const after = form.countries ?? [];
     const same = before.length === after.length && before.every((c) => after.includes(c));
     if (!same) out.push(`countries: ${countryNames(before)} → ${countryNames(after)}`);
+  }
+  if ("audience" in form && slideAudience(form) !== slideAudience(item)) {
+    out.push(`plays on: ${audienceName(slideAudience(item))} → ${audienceName(slideAudience(form))}`);
   }
   const hadVideo = !!item.video, hasVideo = "video" in form ? !!form.video : hadVideo;
   const hadImage = !!item.picture, hasImage = "picture" in form ? !!form.picture : hadImage;
@@ -187,6 +215,8 @@ export function emptyItemForSection(key: ContentSectionKey): Partial<ContentItem
   const base = { sortNumber: 1 };
   switch (key) {
     case "carousel_items":
+    case "worker_carousel_items":
+    case "host_carousel_items":
       return { ...base, picture: "", imageName: "", video: "", countries: ["PH", "US"] };
     case "updates":
       return { ...base, category: "", title: "", body: "" };
@@ -227,6 +257,7 @@ const OPTION_FIELDS = new Set<string>([
   "showArrows",
   "showDots",
   "loop",
+  "hidden",
 ]);
 
 function extractOptions(data: Record<string, any>): SectionOptions {
@@ -267,7 +298,7 @@ export function useContent(actor: ActorInfo) {
 
           if (!sectionSnap.exists()) {
             const defaults =
-              key === "carousel_items" ? DEFAULT_CAROUSEL_OPTIONS : DEFAULT_OPTIONS;
+              isCarouselSection(key) ? DEFAULT_CAROUSEL_OPTIONS : DEFAULT_OPTIONS;
             await setDoc(sectionRef, { ...defaults, lastUpdated: serverTimestamp() });
           }
 
@@ -302,7 +333,7 @@ export function useContent(actor: ActorInfo) {
           // Read options from the flat root doc
           const rawData       = sectionSnap.exists() ? sectionSnap.data() : {};
           const storedOptions = extractOptions(rawData);
-          const fallback      = key === "carousel_items"
+          const fallback      = isCarouselSection(key)
             ? DEFAULT_CAROUSEL_OPTIONS
             : DEFAULT_OPTIONS;
           const options: SectionOptions = Object.keys(storedOptions).length
@@ -338,6 +369,7 @@ export function useContent(actor: ActorInfo) {
       try {
         // Ensure sortNumber is a clean number; strip lastSortNumber from creates
         const { lastSortNumber: _unused, ...cleanForm } = form as any;
+        if (cleanForm.audience == null) delete cleanForm.audience; // images / unset
         const payload = {
           ...cleanForm,
           sortNumber:  Number(cleanForm.sortNumber ?? 1),
@@ -361,7 +393,7 @@ export function useContent(actor: ActorInfo) {
           action:      "content_created",
           description: buildDescription.contentCreated(
             actor.actorName, sectionLabel, title,
-            sectionKey === "carousel_items" ? describeCarouselCreate(form as Partial<CarouselItem>) : [],
+            isCarouselSection(sectionKey) ? describeCarouselCreate(form as Partial<CarouselItem>) : [],
           ),
           targetSection: sectionKey,
           targetId:    docRef.id,
@@ -398,10 +430,13 @@ export function useContent(actor: ActorInfo) {
         // Add content fields based on section type
         switch (sectionKey) {
           case "carousel_items":
+          case "worker_carousel_items":
+          case "host_carousel_items":
             if ("picture" in form) payload.picture = form.picture;
             if ("imageName" in form) payload.imageName = form.imageName;
             if ("video" in form) payload.video = (form as Partial<CarouselItem>).video ?? "";
             if ("countries" in form) payload.countries = (form as Partial<CarouselItem>).countries ?? [];
+            if ("audience" in form) payload.audience = slideAudience(form) ?? deleteField();
             break;
           case "updates":
             if ("category" in form) payload.category = (form as any).category ?? "";
@@ -444,7 +479,7 @@ export function useContent(actor: ActorInfo) {
           action:      "content_updated",
           description: buildDescription.contentUpdated(
             actor.actorName, sectionLabel, title,
-            sectionKey === "carousel_items"
+            isCarouselSection(sectionKey)
               ? describeCarouselChanges(item as CarouselItem, form as Partial<CarouselItem>)
               : [],
           ),
@@ -644,7 +679,7 @@ export function useContent(actor: ActorInfo) {
     const sectionSnap = await getDoc(sectionRef);
 
     if (!sectionSnap.exists()) {
-      const defaults = key === "carousel_items" ? DEFAULT_CAROUSEL_OPTIONS : DEFAULT_OPTIONS;
+      const defaults = isCarouselSection(key) ? DEFAULT_CAROUSEL_OPTIONS : DEFAULT_OPTIONS;
       await setDoc(sectionRef, { ...defaults, lastUpdated: serverTimestamp() });
     }
 
@@ -672,7 +707,7 @@ export function useContent(actor: ActorInfo) {
 
     const rawData = sectionSnap.exists() ? sectionSnap.data() : {};
     const storedOptions = extractOptions(rawData);
-    const fallback = key === "carousel_items" ? DEFAULT_CAROUSEL_OPTIONS : DEFAULT_OPTIONS;
+    const fallback = isCarouselSection(key) ? DEFAULT_CAROUSEL_OPTIONS : DEFAULT_OPTIONS;
 
     return {
       items,
