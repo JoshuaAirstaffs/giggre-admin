@@ -16,6 +16,7 @@ rules_version = '2';
 //   skill_requests/{uid}/{file}                 skill request proofs
 //   wallet_proofs/{uid}/{clientRequestId}.jpg   Gig Wallet top-up proof
 //   chat_attachments/{roomId}/{file}            chat.dart attachments
+//   gig_images/{uid}/{file}                     gig photos (Post a gig, up to 5)
 //   app_content/**                              giggre-admin CMS (carousel,
 //                                               tutorial videos, thumbnails)
 service firebase.storage {
@@ -70,6 +71,16 @@ service firebase.storage {
     match /users/{uid}/documents/{path=**} {
       allow read: if isOwner(uid) || isAdmin();
       allow create, update: if isOwner(uid) && maxMB(15);
+      allow delete: if isOwner(uid) || isAdmin();
+    }
+
+    // ── Gig photos (Post a gig: Quick / Open / Offered, app + website) ──────
+    // Uploaded by the host before the gig doc exists; the gig keeps their
+    // download URLs in `images`. Images only, 8 MB each.
+    match /gig_images/{uid}/{file} {
+      allow read: if signedIn();
+      allow create, update: if isOwner(uid) && maxMB(8) &&
+        request.resource.contentType.matches('image/.*');
       allow delete: if isOwner(uid) || isAdmin();
     }
 
