@@ -28,6 +28,7 @@ import {
   Wallet,
   ListTree,
   TicketPercent,
+  FileSpreadsheet,
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import type { AdminUser } from "@/context/AuthContext";
@@ -71,6 +72,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Marketplace",
     items: [
       { href: "/live-gigs",  icon: ClipboardList, label: "Gigs",                      module: "live-gigs" },
+      { href: "/bulk-gigs",  icon: FileSpreadsheet, label: "Bulk Open Gigs",          module: "bulk-gigs" },
       { href: "/quick-gigs", icon: Zap,            label: "Quick Gigs Configuration",  module: "quick-gigs" },
       { href: "/library-gsin", icon: ListTree,     label: "GSIN Library",              module: "library-gsin" },
     ],

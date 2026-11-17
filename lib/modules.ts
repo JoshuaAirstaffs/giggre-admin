@@ -3,6 +3,7 @@ export type ModuleKey =
   | "analytics"
   | "users"
   | "live-gigs"
+  | "bulk-gigs"
   | "live-map"
   | "admins"
   | "announcements"
@@ -34,6 +35,7 @@ export const ALL_MODULES: ModuleMeta[] = [
   { key: "analytics",          label: "Analytics",               href: "/analytics" },
   { key: "users",              label: "Users",                   href: "/users" },
   { key: "live-gigs",          label: "Live Gigs",               href: "/live-gigs" },
+  { key: "bulk-gigs",          label: "Bulk Open Gigs",          href: "/bulk-gigs" },
   { key: "live-map",           label: "Live Map",                href: "/live-map" },
   { key: "admins",             label: "Admin Management",        href: "/admins",        superAdminOnly: true },
   { key: "announcements",      label: "Announcements",           href: "/announcements" },
