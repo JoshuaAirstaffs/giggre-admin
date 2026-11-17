@@ -25,8 +25,25 @@ function cellXml(v: Cell, ref: string, style: number): string {
   return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${esc(String(v))}</t></is></c>`;
 }
 
-/** Builds an .xlsx file and starts a browser download. */
-export async function downloadXlsx(filename: string, sheetName: string, headers: string[], rows: Cell[][]) {
+/** A dropdown on one column (0-based) of the data sheet, rows 2…1000. */
+export interface XlsxDropdown {
+  col: number;
+  values: string[];
+}
+
+/**
+ * Builds an .xlsx file and starts a browser download. With `dropdowns`, the
+ * listed columns only accept a value from their list; the lists live on a
+ * hidden "Lists" sheet (a list typed into the rule itself is capped at 255
+ * characters, too short for e.g. the skills library).
+ */
+export async function downloadXlsx(
+  filename: string,
+  sheetName: string,
+  headers: string[],
+  rows: Cell[][],
+  opts: { dropdowns?: XlsxDropdown[] } = {},
+) {
   const { default: JSZip } = await import("jszip");
 
   const widths = headers.map((h, c) =>
@@ -37,12 +54,33 @@ export async function downloadXlsx(filename: string, sheetName: string, headers:
     .map((r, i) => `<row r="${i + 1}">${r.map((v, c) => cellXml(v, `${colName(c)}${i + 1}`, i === 0 ? 1 : 0)).join("")}</row>`)
     .join("");
 
+  const dropdowns = (opts.dropdowns ?? []).filter((d) => d.values.length > 0);
+  const validations = dropdowns.length
+    ? `<dataValidations count="${dropdowns.length}">` +
+      dropdowns
+        .map((d, i) => {
+          const col = colName(d.col);
+          const src = `Lists!$${colName(i)}$1:$${colName(i)}$${d.values.length}`;
+          return `<dataValidation type="list" allowBlank="1" showErrorMessage="1" errorTitle="Not in the list" error="Pick a value from the dropdown." sqref="${col}2:${col}1000"><formula1>${src}</formula1></dataValidation>`;
+        })
+        .join("") +
+      `</dataValidations>`
+    : "";
+  const listRows = Math.max(0, ...dropdowns.map((d) => d.values.length));
+  const listSheet =
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>` +
+    Array.from({ length: listRows }, (_, r) =>
+      `<row r="${r + 1}">${dropdowns.map((d, i) => (r < d.values.length ? cellXml(d.values[r], `${colName(i)}${r + 1}`, 0) : "")).join("")}</row>`,
+    ).join("") +
+    `</sheetData></worksheet>`;
+
   const sheet =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
     `<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` +
     `<cols>${widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("")}</cols>` +
-    `<sheetData>${sheetData}</sheetData></worksheet>`;
+    `<sheetData>${sheetData}</sheetData>${validations}</worksheet>`;
 
   const zip = new JSZip();
   const add = (name: string, xml: string) => zip.file(name, xml, { createFolders: false });
@@ -54,6 +92,7 @@ export async function downloadXlsx(filename: string, sheetName: string, headers:
       `<Default Extension="xml" ContentType="application/xml"/>` +
       `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
       `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+      (dropdowns.length ? `<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` : "") +
       `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` +
       `</Types>`,
   );
@@ -68,7 +107,9 @@ export async function downloadXlsx(filename: string, sheetName: string, headers:
     "xl/workbook.xml",
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
-      `<sheets><sheet name="${esc(sheetName.replace(/[\\/?*[\]:]/g, "").slice(0, 31) || "Sheet1")}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      `<sheets><sheet name="${esc(sheetName.replace(/[\\/?*[\]:]/g, "").slice(0, 31) || "Sheet1")}" sheetId="1" r:id="rId1"/>` +
+      (dropdowns.length ? `<sheet name="Lists" sheetId="2" state="hidden" r:id="rId3"/>` : "") +
+      `</sheets></workbook>`,
   );
   add(
     "xl/_rels/workbook.xml.rels",
@@ -76,6 +117,7 @@ export async function downloadXlsx(filename: string, sheetName: string, headers:
       `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
       `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>` +
       `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
+      (dropdowns.length ? `<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>` : "") +
       `</Relationships>`,
   );
   add(
@@ -90,6 +132,7 @@ export async function downloadXlsx(filename: string, sheetName: string, headers:
       `</styleSheet>`,
   );
   add("xl/worksheets/sheet1.xml", sheet);
+  if (dropdowns.length) add("xl/worksheets/sheet2.xml", listSheet);
 
   const blob = await zip.generateAsync({
     type: "blob",
