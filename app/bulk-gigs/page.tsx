@@ -3,6 +3,7 @@
 import AdminLayout from "@/components/layout/AdminLayout";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import BulkGigs from "./BulkGigs";
+import DeleteHostGigs from "./DeleteHostGigs";
 
 export default function BulkGigsPage() {
   useAuthGuard({ module: "bulk-gigs" });
@@ -12,7 +13,10 @@ export default function BulkGigsPage() {
       title="Bulk Open Gigs"
       subtitle="Post many Open Gigs at once from an Excel sheet. Every row gets the same checks as posting in the app."
     >
-      <BulkGigs />
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <BulkGigs />
+        <DeleteHostGigs />
+      </div>
     </AdminLayout>
   );
 }

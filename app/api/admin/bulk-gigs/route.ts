@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import { GeoPoint, Timestamp } from "firebase-admin/firestore";
 import type { BulkGigRow, BulkGigPreview, ResolvedLocation } from "@/lib/bulkGigs";
+import { findHost } from "@/lib/findHost.server";
 
 export const maxDuration = 30;
 
@@ -183,22 +184,6 @@ async function resolveLocation(row: BulkGigRow): Promise<ResolvedLocation | stri
 
 // ── Host lookup ──────────────────────────────────────────────────────────────
 
-async function findHost(value: string) {
-  const users = adminDb.collection("users");
-  if (value.includes("@")) {
-    for (const email of new Set([value, value.toLowerCase()])) {
-      const q = await users.where("email", "==", email).limit(1).get();
-      if (!q.empty) return q.docs[0];
-    }
-    return null;
-  }
-  if (!value.includes("/")) {
-    const byId = await users.doc(value).get();
-    if (byId.exists) return byId;
-  }
-  const q = await users.where("userId", "==", value).limit(1).get();
-  return q.empty ? null : q.docs[0];
-}
 
 // ── Route ────────────────────────────────────────────────────────────────────
 
