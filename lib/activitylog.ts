@@ -76,6 +76,7 @@ export type UserRequestLogAction =
 export type VerificationLogAction =
   | "verification_verified"
   | "verification_rejected"
+  | "verification_undone"
   | "verification_note"
   | "verification_created"
   | "verification_document_viewed"
