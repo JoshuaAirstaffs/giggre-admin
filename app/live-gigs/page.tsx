@@ -92,6 +92,7 @@ interface GigBase {
   gsins?: string;
   gsku?: string;
   gsinCandidates?: string[]; // skill is linked to several task types → admin picks
+  customTaskType?: string; // host typed it under "Other" (not in the GSIN Library)
 }
 
 type Gig = GigBase & Record<string, unknown>;
@@ -1889,6 +1890,11 @@ function LiveGigsPageInner() {
                             {gig.gsinCandidates?.length ? "Pick task type" : "Assign"}
                           </button>
                         )}
+                        {gig.customTaskType && (
+                          <div className="lg-gig-meta" title="The host typed this task type under Other — it isn't in the GSIN Library">
+                            Other: {gig.customTaskType}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <div className="lg-gig-title">{gig.title || "Untitled Gig"}</div>
@@ -2985,6 +2991,7 @@ function AssignCodesModal({ gig, onClose, onAssigned }: {
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
           <b style={{ color: "var(--text-primary)" }}>{gig.title || "Untitled Gig"}</b> · {GIG_TYPE_LABELS[gig.gigType]}
+          {gig.customTaskType && <div style={{ marginTop: 4, fontSize: 12 }}>Host&apos;s task type (Other): <b>{gig.customTaskType}</b> — not in the library; pick the closest or <a href="/library-gsin" style={{ color: "var(--blue)" }}>add it</a>.</div>}
           {gigSkill && <div style={{ marginTop: 4, fontSize: 12 }}>Skill: <b>{gigSkill}</b>{suggested.size > 1 ? ` — linked to ${suggested.size} task types, suggested below` : ""}</div>}
           {gig.gsku && <div style={{ marginTop: 4, fontSize: 12 }}>Current: <span className="lg-code">{gig.gsins} · {gig.gsku}</span> — re-assigning gives it a new GSKU (the old one is kept in its history).</div>}
         </div>
