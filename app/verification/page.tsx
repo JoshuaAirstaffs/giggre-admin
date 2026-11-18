@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "rea
 import { useSearchParams } from "next/navigation";
 import JSZip from "jszip";
 import AdminLayout from "@/components/layout/AdminLayout";
-import Modal from "@/components/ui/Modal";
+import Modal, { ConfirmDialog } from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAdminNotifications } from "@/hooks/useAdminNotifications";
@@ -16,6 +16,9 @@ import {
   updateDoc,
   addDoc,
   getDocs,
+  getDoc,
+  runTransaction,
+  deleteField,
   serverTimestamp,
   Timestamp,
   query,
@@ -25,6 +28,7 @@ import {
 import { db, storage } from "@/lib/firebase";
 import { ref, getBlob, getMetadata } from "firebase/storage";
 import { writeLog } from "@/lib/activitylog";
+import { toast } from "@/components/ui/Toaster";
 import {
   Search, RefreshCw, BadgeCheck, XCircle, Clock, X,
   User, Phone, Mail, Hash, Image as ImageIcon, AlertTriangle,
@@ -66,6 +70,55 @@ interface VerificationRequest {
   reviewedBy: string | null;
   rejectReason: string | null;
   updatedAt: Timestamp | null;
+  undoState: UndoState | null;
+}
+
+/**
+ * Saved on verification_requests/{id}.undoState at approve/reject time: what
+ * the request and the user looked like before, so the decision can be undone
+ * for UNDO_WINDOW_MS (from the toast or from the request's detail panel).
+ */
+interface UndoState {
+  /** The decision being undone. */
+  status: "verified" | "rejected";
+  decidedAt: Timestamp | null;
+  decidedBy: string;
+  prevStatus: VerificationRequest["status"];
+  prevReviewedAt: Timestamp | null;
+  prevReviewedBy: string | null;
+  prevRejectReason: string | null;
+  /** users/{id}.isVerified before; only meaningful when prevIsVerifiedSet. */
+  prevIsVerified: string | null;
+  prevIsVerifiedSet: boolean;
+}
+
+/**
+ * How long a decision can be undone. null = any time.
+ * TEMPORARY: no limit for now; set back to 24 * 60 * 60 * 1000 later.
+ */
+const UNDO_WINDOW_MS: number | null = null;
+/** How long the Undo button stays in the toast. */
+const UNDO_TOAST_MS = 15000;
+
+/** The state an undo would restore, or null if this request can't be undone (now). */
+function undoInfo(r: Pick<VerificationRequest, "status" | "undoState">, now: number): { deadline: number; prevStatus: VerificationRequest["status"] } | null {
+  if (r.status !== "verified" && r.status !== "rejected") return null;
+  const u = r.undoState;
+  if (u && u.status === r.status) {
+    const at = u.decidedAt?.toMillis?.();
+    if (!at) return null;
+    const deadline = UNDO_WINDOW_MS == null ? Infinity : at + UNDO_WINDOW_MS;
+    return deadline > now ? { deadline, prevStatus: u.prevStatus } : null;
+  }
+  // Decided without a saved state (before Undo existed): with no time limit
+  // it can still go back to pending, like a fresh submission.
+  return UNDO_WINDOW_MS == null ? { deadline: Infinity, prevStatus: "pending" } : null;
+}
+
+function fmtLeft(ms: number): string {
+  const m = Math.max(1, Math.ceil(ms / 60000));
+  const h = Math.floor(m / 60);
+  return h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
 }
 
 interface TimelineEntry {
@@ -104,6 +157,7 @@ const TIMELINE_CONFIG: Record<string, { label: string; color: string; glow: stri
   verification_created: { label: "Submitted", color: "var(--blue)", glow: "rgba(59,130,246,0.18)" },
   verification_verified: { label: "Verified", color: "var(--green)", glow: "rgba(34,197,94,0.18)" },
   verification_rejected: { label: "Rejected", color: "var(--red)", glow: "rgba(239,68,68,0.18)" },
+  verification_undone: { label: "Decision Undone", color: "var(--amber)", glow: "rgba(245,158,11,0.18)" },
   verification_note: { label: "Verification Notification", color: "var(--text-secondary)", glow: "rgba(100,116,139,0.18)" },
   verification_document_viewed: { label: "Viewed Document", color: "var(--text-muted)", glow: "rgba(100,116,139,0.12)" },
   // verification_document_downloaded: hidden for now
@@ -533,6 +587,7 @@ function VerificationPageInner() {
         reviewedBy: d.data().reviewedBy ?? null,
         rejectReason: d.data().rejectReason ?? null,
         updatedAt: d.data().updatedAt ?? null,
+        undoState: d.data().undoState ?? null,
       }));
       setRequests(data);
       setLoading(false);
@@ -995,18 +1050,167 @@ function VerificationPageInner() {
 
   // ─── Review actions ───────────────────────────────────────────────────────
 
+  const notifUserRef = useRef(notifUser);
+  notifUserRef.current = notifUser;
+  const [undoTarget, setUndoTarget] = useState<VerificationRequest | null>(null);
+  const [undoing, setUndoing] = useState(false);
+
+  /** Undo the approve/reject saved in the request's undoState (within 24 hours). */
+  const undoReview = useCallback(async (requestId: string, userId: string, name: string) => {
+    if (!user) return false;
+    const reqRef = doc(db, "verification_requests", requestId);
+    const userRef = doc(db, "users", userId);
+    let saved: UndoState;
+    try {
+      saved = await runTransaction(db, async (tx) => {
+        const [req, usr] = await Promise.all([tx.get(reqRef), tx.get(userRef)]);
+        const r = req.data();
+        if (!r || (r.status !== "verified" && r.status !== "rejected")) {
+          throw new Error("This request isn't approved or rejected any more, so it was left as it is.");
+        }
+        let u = r.undoState as UndoState | undefined;
+        if (!u || u.status !== r.status) {
+          // No saved state for this decision (made before Undo existed).
+          if (UNDO_WINDOW_MS != null) {
+            throw new Error("This decision can't be undone. Review the request again instead.");
+          }
+          u = {
+            status: r.status, decidedAt: r.reviewedAt ?? null, decidedBy: r.reviewedBy ?? "an admin",
+            prevStatus: "pending", prevReviewedAt: null, prevReviewedBy: null, prevRejectReason: null,
+            // The app sets users.isVerified to "pending" when a request is submitted.
+            prevIsVerified: "pending", prevIsVerifiedSet: true,
+          };
+        } else if (UNDO_WINDOW_MS != null) {
+          const at = u.decidedAt?.toMillis?.();
+          if (!at || Date.now() > at + UNDO_WINDOW_MS) {
+            throw new Error("The undo window has passed. Review the request again instead.");
+          }
+        }
+        const saved = u;
+        tx.update(reqRef, {
+          status: saved.prevStatus,
+          reviewedAt: saved.prevReviewedAt ?? null,
+          reviewedBy: saved.prevReviewedBy ?? null,
+          rejectReason: saved.prevRejectReason ?? null,
+          updatedAt: serverTimestamp(),
+          undoState: deleteField(),
+          // Lets onVerificationRequestSubmitted skip the "new request" bell.
+          reviewUndoneAt: serverTimestamp(),
+        });
+        const setTo = saved.status === "verified" ? "verified" : "unverified";
+        if (usr.exists() && usr.data().isVerified === setTo) {
+          tx.update(userRef, { isVerified: saved.prevIsVerifiedSet ? saved.prevIsVerified : deleteField() });
+        }
+        return saved;
+      });
+    } catch (e: any) {
+      toast.error("Couldn't undo", e?.message ?? "Please try again.");
+      return false;
+    }
+
+    const what = saved.status === "verified" ? "approval" : "rejection";
+    await writeLog({
+      actorId: user.uid,
+      actorName: user.displayName ?? "Admin",
+      actorEmail: user.email ?? undefined,
+      module: "verification",
+      action: "verification_undone",
+      description: `Undid ${what} of ${name} (made by ${saved.decidedBy}), back to ${saved.prevStatus}`,
+      targetId: userId,
+      targetName: name,
+    }).catch(() => {});
+
+    // Drop the notification that was pre-filled for this decision.
+    if (notifUserRef.current?.id === userId) {
+      setNotifUser(null);
+      setNotifUserSearch("");
+      setNotifPreset("");
+      setNotifRejectReason("");
+      setNotifVerificationStatus("");
+      setActivePageTab("requests");
+    }
+
+    // Was the user already told about the decision?
+    let notified = false;
+    try {
+      const since = saved.decidedAt?.toMillis?.() ?? 0;
+      const sent = await getDocs(query(
+        collection(db, "notifications"),
+        where("userId", "==", userId),
+        where("category", "==", "account_verification"),
+      ));
+      notified = sent.docs.some((d) => (d.data().createdAt?.toMillis?.() ?? 0) >= since);
+    } catch { /* just skip the warning */ }
+
+    if (notified) {
+      toast.warning(
+        `${name}'s ${what} undone`,
+        `Back to ${saved.prevStatus}. They were already sent a notification about it, so send a correction if needed.`,
+      );
+    } else {
+      toast.success(`${name}'s ${what} undone`, `Back to ${saved.prevStatus}.`);
+    }
+    return true;
+  }, [user]);
+
+  const offerUndo = useCallback((r: VerificationRequest, status: "verified" | "rejected") => {
+    toast.withAction(
+      "success",
+      status === "verified" ? `${r.name} verified` : `${r.name} rejected`,
+      UNDO_WINDOW_MS == null
+        ? "Made a mistake? Undo now, or later from the request."
+        : "Made a mistake? Undo now, or later from the request (time-limited).",
+      { label: "Undo", onClick: () => { void undoReview(r.id, r.userId, r.name); } },
+      UNDO_TOAST_MS,
+    );
+  }, [undoReview]);
+
+  const confirmUndo = useCallback(async () => {
+    if (!undoTarget || undoing) return;
+    setUndoing(true);
+    try {
+      if (await undoReview(undoTarget.id, undoTarget.userId, undoTarget.name)) {
+        setUndoTarget(null);
+        setSelected(null);
+        setJumpToReqUserId(undoTarget.userId);
+      }
+    } finally {
+      setUndoing(false);
+    }
+  }, [undoTarget, undoing, undoReview]);
+
+  // Ticks the "undo time left" reminders (table rows and detail panel).
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
+
   const handleApprove = useCallback(async () => {
     if (!selected || !user) return;
     setSubmitting(true);
     const approvedUser = selected;
+    const reviewer = user.displayName ?? user.email ?? user.uid;
     try {
+      const prevIsVerified = (await getDoc(doc(db, "users", selected.userId))).data()?.isVerified;
       await Promise.all([
         updateDoc(doc(db, "verification_requests", selected.id), {
           status: "verified",
           reviewedAt: serverTimestamp(),
-          reviewedBy: user.displayName ?? user.email ?? user.uid,
+          reviewedBy: reviewer,
           rejectReason: null,
           updatedAt: serverTimestamp(),
+          undoState: {
+            status: "verified",
+            decidedAt: serverTimestamp(),
+            decidedBy: reviewer,
+            prevStatus: selected.status,
+            prevReviewedAt: selected.reviewedAt ?? null,
+            prevReviewedBy: selected.reviewedBy ?? null,
+            prevRejectReason: selected.rejectReason ?? null,
+            prevIsVerified: typeof prevIsVerified === "string" ? prevIsVerified : null,
+            prevIsVerifiedSet: prevIsVerified !== undefined,
+          },
         }),
         updateDoc(doc(db, "users", selected.userId), {
           isVerified: "verified",
@@ -1022,6 +1226,7 @@ function VerificationPageInner() {
         targetId: selected.userId,
         targetName: selected.name,
       });
+      offerUndo(selected, "verified");
       setSelected(null);
       setActionMode(null);
       setJumpToReqUserId(approvedUser.userId);
@@ -1037,21 +1242,34 @@ function VerificationPageInner() {
     } finally {
       setSubmitting(false);
     }
-  }, [selected, user, notifFeaturesEnabled]);
+  }, [selected, user, notifFeaturesEnabled, offerUndo]);
 
   const handleReject = useCallback(async () => {
     if (!selected || !user || !rejectReason.trim()) return;
     setSubmitting(true);
     const rejectedUser = selected;
     const reason = rejectReason.trim();
+    const reviewer = user.displayName ?? user.email ?? user.uid;
     try {
+      const prevIsVerified = (await getDoc(doc(db, "users", selected.userId))).data()?.isVerified;
       await Promise.all([
         updateDoc(doc(db, "verification_requests", selected.id), {
           status: "rejected",
           reviewedAt: serverTimestamp(),
-          reviewedBy: user.displayName ?? user.email ?? user.uid,
+          reviewedBy: reviewer,
           rejectReason: reason,
           updatedAt: serverTimestamp(),
+          undoState: {
+            status: "rejected",
+            decidedAt: serverTimestamp(),
+            decidedBy: reviewer,
+            prevStatus: selected.status,
+            prevReviewedAt: selected.reviewedAt ?? null,
+            prevReviewedBy: selected.reviewedBy ?? null,
+            prevRejectReason: selected.rejectReason ?? null,
+            prevIsVerified: typeof prevIsVerified === "string" ? prevIsVerified : null,
+            prevIsVerifiedSet: prevIsVerified !== undefined,
+          },
         }),
         updateDoc(doc(db, "users", selected.userId), {
           isVerified: "unverified",
@@ -1067,6 +1285,7 @@ function VerificationPageInner() {
         targetId: selected.userId,
         targetName: selected.name,
       });
+      offerUndo(selected, "rejected");
       setSelected(null);
       setActionMode(null);
       setRejectReason("");
@@ -1083,7 +1302,7 @@ function VerificationPageInner() {
     } finally {
       setSubmitting(false);
     }
-  }, [selected, user, rejectReason, notifFeaturesEnabled]);
+  }, [selected, user, rejectReason, notifFeaturesEnabled, offerUndo]);
 
   // ─── Stats ────────────────────────────────────────────────────────────────
 
@@ -1372,6 +1591,22 @@ function VerificationPageInner() {
           display: flex; gap: 8px; align-items: flex-start; margin-bottom: 16px;
         }
         .vr-actions { display: flex; gap: 10px; padding-top: 4px; }
+        .vr-undo-reminder {
+          background: var(--amber-dim, rgba(245,158,11,0.1)); border: 1px solid var(--amber);
+          border-radius: var(--radius-sm); padding: 10px 12px;
+          font-size: 12.5px; color: var(--text-primary); line-height: 1.5;
+          display: flex; gap: 10px; align-items: flex-start; margin-bottom: 16px;
+        }
+        .vr-undo-reminder > svg { color: var(--amber); }
+        .vr-row-undo {
+          display: inline-flex; align-items: center; gap: 4px; margin-top: 5px;
+          font-size: 11px; font-weight: 600; color: var(--amber);
+          background: var(--amber-dim, rgba(245,158,11,0.12)); border: 1px solid transparent;
+          border-radius: 999px; padding: 2px 8px; cursor: pointer; white-space: nowrap;
+          transition: border-color 0.12s;
+        }
+        .vr-row-undo:hover { border-color: var(--amber); }
+        @media (max-width: 520px) { .vr-undo-reminder { flex-wrap: wrap; } }
         .vr-textarea {
           width: 100%; border: 1px solid var(--border);
           background: var(--bg-elevated); border-radius: var(--radius-sm);
@@ -2031,6 +2266,22 @@ function VerificationPageInner() {
                         {STATUS_BADGE[r.status]?.icon}
                         {r.status}
                       </span>
+                      {(() => {
+                        const info = undoInfo(r, now);
+                        if (!info) return null;
+                        const limited = info.deadline !== Infinity;
+                        return (
+                          <button
+                            className="vr-row-undo"
+                            title={limited
+                              ? `Undo this decision (until ${new Date(info.deadline).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })})`
+                              : `Undo this decision (back to ${info.prevStatus})`}
+                            onClick={(e) => { e.stopPropagation(); setUndoTarget(r); }}
+                          >
+                            <RotateCcw size={11} /> Undo{limited ? ` · ${fmtLeft(info.deadline - now)} left` : ""}
+                          </button>
+                        );
+                      })()}
                     </td>
                     <td style={{ fontSize: 12, color: "var(--text-muted)" }}>
                       {fmtDate(r.updatedAt ?? r.reviewedAt ?? r.submittedAt)}
@@ -2238,6 +2489,29 @@ function VerificationPageInner() {
                 <span><strong>Rejection reason:</strong> {selected.rejectReason}</span>
               </div>
             )}
+
+            {/* Undo reminder (24 hours after approve / reject) */}
+            {(() => {
+              const info = undoInfo(selected, now);
+              if (!info) return null;
+              return (
+                <div className="vr-undo-reminder">
+                  <RotateCcw size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <strong>{selected.status === "verified" ? "Approved" : "Rejected"} by mistake?</strong>{" "}
+                    {info.deadline === Infinity ? "You can undo this decision." : (
+                      <>
+                        You can undo this until{" "}
+                        {new Date(info.deadline).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}{" "}
+                        (<b>{fmtLeft(info.deadline - now)} left</b>).
+                      </>
+                    )}{" "}
+                    It goes back to <b>{info.prevStatus}</b>.
+                  </div>
+                  <Button variant="secondary" size="sm" onClick={() => setUndoTarget(selected)}>Undo decision</Button>
+                </div>
+              );
+            })()}
 
             {/* ── Submitted Documents ── */}
             <div className="vr-section-label" style={{ justifyContent: "space-between" }}>
@@ -2482,6 +2756,18 @@ function VerificationPageInner() {
           </div>
         </Modal>
       )}
+
+      <ConfirmDialog
+        open={!!undoTarget}
+        onClose={() => !undoing && setUndoTarget(null)}
+        onConfirm={confirmUndo}
+        loading={undoing}
+        title="Undo this decision?"
+        confirmLabel="Undo decision"
+        message={undoTarget
+          ? `${undoTarget.name}'s ${undoTarget.status === "verified" ? "approval" : "rejection"} will be undone: the request goes back to ${undoInfo(undoTarget, Date.now())?.prevStatus ?? "pending"} and their account's verified status is restored. If they were already notified, send them a correction.`
+          : ""}
+      />
 
       </>)}
 

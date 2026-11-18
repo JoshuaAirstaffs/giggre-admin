@@ -14,6 +14,8 @@ interface Toast {
   message?: string;
   /** Makes the whole toast clickable (notification pop-ups) */
   onOpen?: () => void;
+  /** A button in the toast, e.g. Undo. Clicking it closes the toast. */
+  action?: { label: string; onClick: () => void };
 }
 
 // ─── Singleton store (simple module-level state for easy global use) ──────────
@@ -33,13 +35,17 @@ export const toast = {
   info:    (title: string, message?: string) => add("info",    title, message),
   /** New admin notification / message pop-up — stays longer, click to open */
   notify:  (title: string, message?: string, onOpen?: () => void) => add("notify", title, message, onOpen, 8000),
+  /** Toast with a button (e.g. Undo). Returns a function that closes it early. */
+  withAction: (type: ToastType, title: string, message: string | undefined, action: { label: string; onClick: () => void }, duration = 10000) =>
+    add(type, title, message, undefined, duration, action),
 };
 
-function add(type: ToastType, title: string, message?: string, onOpen?: () => void, duration = 4500) {
+function add(type: ToastType, title: string, message?: string, onOpen?: () => void, duration = 4500, action?: Toast["action"]) {
   const id = Math.random().toString(36).slice(2);
-  _toasts = [..._toasts, { id, type, title, message, onOpen }];
+  _toasts = [..._toasts, { id, type, title, message, onOpen, action }];
   notify();
   setTimeout(() => remove(id), duration);
+  return () => remove(id);
 }
 
 function remove(id: string) {
@@ -136,6 +142,18 @@ export default function Toaster() {
         .toast-dismiss:hover { background: var(--bg-elevated); color: var(--text-primary); }
         .toast-item.clickable { cursor: pointer; }
         .toast-item.clickable:hover { background: var(--bg-elevated); }
+        .toast-action {
+          margin-top: 8px;
+          font-size: 12px;
+          font-weight: 700;
+          color: var(--blue);
+          padding: 4px 10px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          cursor: pointer;
+          transition: background 0.12s;
+        }
+        .toast-action:hover { background: var(--bg-elevated); }
         .toast-msg.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
       `}</style>
 
@@ -153,6 +171,11 @@ export default function Toaster() {
             <div className="toast-body">
               <div className="toast-title">{t.title}</div>
               {t.message && <div className={`toast-msg${t.onOpen ? " clamp" : ""}`}>{t.message}</div>}
+              {t.action && (
+                <button className="toast-action" onClick={(e) => { e.stopPropagation(); remove(t.id); t.action!.onClick(); }}>
+                  {t.action.label}
+                </button>
+              )}
             </div>
             <button className="toast-dismiss" onClick={(e) => { e.stopPropagation(); remove(t.id); }} aria-label="Dismiss">
               <X size={13} />
