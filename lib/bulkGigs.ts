@@ -103,7 +103,7 @@ export async function downloadTemplate(skills: string[]) {
 
 // ── .xlsx reading ─────────────────────────────────────────────────────────────
 
-type Cell = string | number | null;
+export type Cell = string | number | null;
 
 function colIndex(ref: string): number {
   const letters = ref.replace(/[0-9]/g, "");
@@ -113,7 +113,7 @@ function colIndex(ref: string): number {
 }
 
 /** First worksheet of an .xlsx file as rows of cells (numbers stay numbers). */
-async function readFirstSheet(file: File): Promise<Cell[][]> {
+export async function readFirstSheet(file: File): Promise<Cell[][]> {
   const { default: JSZip } = await import("jszip");
   let zip;
   try {
