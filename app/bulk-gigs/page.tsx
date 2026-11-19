@@ -1,16 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { PlusCircle, Trash2 } from "lucide-react";
+import { PlusCircle } from "lucide-react";
+// Edit / Delete tabs are turned off for now; uncomment these (and the tabs below) to bring them back.
+// import { Pencil, Trash2 } from "lucide-react";
 import AdminLayout from "@/components/layout/AdminLayout";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import BulkGigs from "./BulkGigs";
-import DeleteHostGigs from "./DeleteHostGigs";
+// import DeleteHostGigs from "./DeleteHostGigs";
+// import EditGigs from "./EditGigs";
+// import { BulkStyles } from "./bulkUi";
 
-type Tab = "post" | "delete";
+type Tab = "post" | "edit" | "delete";
 
 const SUBTITLE: Record<Tab, string> = {
   post: "Post many Open Gigs at once from an Excel sheet. Every row gets the same checks as posting in the app.",
+  edit: "Change many Open Gigs at once: download them to Excel, edit the cells, upload it back.",
   delete: "Remove Open Gigs of chosen hosts that nobody has applied to yet.",
 };
 
@@ -31,13 +36,22 @@ export default function BulkGigsPage() {
         <button role="tab" aria-selected={tab === "post"} className={`bgp-tab${tab === "post" ? " on" : ""}`} onClick={() => setTab("post")}>
           <PlusCircle size={15} /> Post gigs
         </button>
+        {/* Turned off for now.
+        <button role="tab" aria-selected={tab === "edit"} className={`bgp-tab${tab === "edit" ? " on" : ""}`} onClick={() => setTab("edit")}>
+          <Pencil size={15} /> Edit gigs
+        </button>
         <button role="tab" aria-selected={tab === "delete"} className={`bgp-tab danger${tab === "delete" ? " on" : ""}`} onClick={() => setTab("delete")}>
           <Trash2 size={15} /> Delete gigs
         </button>
+        */}
       </div>
-      {/* Both stay mounted so switching tabs doesn't lose an upload in progress. */}
+      {/* Tabs stay mounted so switching tabs doesn't lose an upload in progress. */}
       <div hidden={tab !== "post"}><BulkGigs /></div>
+      {/* Turned off for now.
+      <BulkStyles />
+      <div hidden={tab !== "edit"}><EditGigs /></div>
       <div hidden={tab !== "delete"}><DeleteHostGigs /></div>
+      */}
     </AdminLayout>
   );
 }

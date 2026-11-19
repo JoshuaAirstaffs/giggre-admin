@@ -1,20 +1,19 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { AlertTriangle, CheckCircle, Download, FileSpreadsheet, Info, Search, ShieldCheck, Trash2, Upload, UserX, Users, X } from "lucide-react";
+import { AlertTriangle, CheckCircle, Download, FileSpreadsheet, Info, ShieldCheck, Trash2, Upload, UserX, Users } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/Modal";
 import { toast } from "@/components/ui/Toaster";
 import { auth } from "@/lib/firebase";
 import { readApiJson } from "@/lib/apiResponse";
 import { writeLog } from "@/lib/activitylog";
-import { downloadXlsx } from "@/lib/xlsx";
-import { readFirstSheet, type Cell } from "@/lib/bulkGigs";
+import { readFirstSheet } from "@/lib/bulkGigs";
+import { downloadGigSheet, parseGigTable } from "@/lib/gigSheet";
 import { useAuth } from "@/context/AuthContext";
+import { HostPicker, MAX_HOSTS } from "./bulkUi";
 import type { HostGigsResult, HostLookup } from "@/app/api/admin/bulk-gigs/host-gigs/route";
 
-/** Keep in sync with MAX_HOSTS in the host-gigs route. */
-const MAX_HOSTS = 20;
 
 async function call<T extends object>(body: object): Promise<T> {
   const token = await auth.currentUser?.getIdToken();
@@ -28,10 +27,6 @@ async function call<T extends object>(body: object): Promise<T> {
   return data;
 }
 
-const when = (ms: number | null) =>
-  ms ? new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—";
-const text = (v: Cell | undefined) => (v == null ? "" : String(v).trim());
-const norm = (h: string) => h.toLowerCase().replace(/[^a-z]/g, "");
 const key = (q: string) => q.trim().toLowerCase();
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -50,7 +45,6 @@ type UploadInfo = { name: string; marked: number; blank: number; issues: string[
  */
 export default function DeleteHostGigs() {
   const { user } = useAuth();
-  const [draft, setDraft] = useState("");
   const [entries, setEntries] = useState<string[]>([]);
   const [searching, setSearching] = useState(false);
   const [result, setResult] = useState<HostGigsResult | null>(null);
@@ -66,31 +60,13 @@ export default function DeleteHostGigs() {
   const [deleting, setDeleting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  /** Adds typed / pasted emails (split on commas, semicolons, spaces, new lines). */
-  const addEntries = (raw: string, base = entries): string[] => {
-    const next = [...base];
-    for (const part of raw.split(/[\s,;]+/)) {
-      const v = part.trim();
-      if (!v || next.some((e) => key(e) === key(v))) continue;
-      if (next.length >= MAX_HOSTS) {
-        toast.warning(`At most ${MAX_HOSTS} hosts`, "Remove some to add more.");
-        break;
-      }
-      next.push(v);
-    }
-    setEntries(next);
-    setDraft("");
-    return next;
-  };
-
   const lookupFor = (entry: string): HostLookup | undefined =>
     result?.hosts.find((h) => key(h.query) === key(entry));
 
   /** Looks the hosts up again and lists their deletable gigs; returns the result (null on error). */
   const search = async (list = entries, opts: { force?: boolean } = {}): Promise<HostGigsResult | null> => {
     if (searching && !opts.force) return null;
-    let hosts = list;
-    if (draft.trim()) hosts = addEntries(draft, list);
+    const hosts = list;
     if (hosts.length === 0) return null;
     setSearching(true);
     try {
@@ -160,18 +136,8 @@ export default function DeleteHostGigs() {
 
   const downloadSheet = async () => {
     if (gigs.length === 0) return;
-    const day = new Date().toISOString().slice(0, 10);
-    await downloadXlsx(
-      `delete-gigs-${day}.xlsx`,
-      "Gigs",
-      ["Gig ID", "Host email", "Host name", "Title", "Posted", "Schedule", "Location", "Action"],
-      gigs.map((g) => [
-        // Host email (or user ID if the account has none) lets the file be used after a reload.
-        g.id, foundHosts.get(g.hostId)?.email || g.hostId, foundHosts.get(g.hostId)?.name ?? "", g.title,
-        when(g.createdAt), g.scheduledAt ? when(g.scheduledAt) : "Flexible", g.address, "",
-      ]),
-      { dropdowns: [{ col: 7, values: ["delete"] }] },
-    );
+    // Same workbook format as Post / Edit, plus the Action column.
+    await downloadGigSheet("delete", gigs);
   };
 
   /**
@@ -183,24 +149,14 @@ export default function DeleteHostGigs() {
   const readSheet = async (file: File) => {
     setReadingFile(true);
     try {
-      const sheet = await readFirstSheet(file);
-      const headerAt = sheet.findIndex((r) => r.some((c) => text(c) !== ""));
-      if (headerAt < 0) throw new Error("The sheet is empty.");
-      const header = sheet[headerAt].map((h) => norm(text(h)));
-      const idCol = header.indexOf("gigid");
-      const actionCol = header.indexOf("action");
-      const hostCol = header.indexOf("hostemail");
-      if (idCol < 0 || actionCol < 0) {
-        throw new Error("The sheet needs the \"Gig ID\" and \"Action\" columns. Use Download Excel to get the right sheet.");
-      }
+      const sheet = await readFirstSheet(file, "Gigs");
+      const table = parseGigTable(sheet, ["gigId", "action"]);
 
       // Hosts named in the file (only rows marked delete matter).
       const fileHosts = new Set<string>();
-      if (hostCol >= 0) {
-        for (const r of sheet.slice(headerAt + 1)) {
-          const h = text(r[hostCol]);
-          if (h && text(r[actionCol])) fileHosts.add(h);
-        }
+      for (const r of table.rows) {
+        const h = r.text("host");
+        if (h && r.text("action")) fileHosts.add(h);
       }
       let current = result;
       const knownEmails = new Set([...foundHosts.values()].flatMap((h) => [key(h.email), key(h.id)]).filter(Boolean));
@@ -224,13 +180,13 @@ export default function DeleteHostGigs() {
       const marked = new Set<string>();
       const issues: string[] = [];
       let blank = 0;
-      sheet.slice(headerAt + 1).forEach((r, i) => {
-        const row = headerAt + i + 2; // Excel row number
-        const id = text(r[idCol]);
-        const action = text(r[actionCol]).toLowerCase();
+      table.rows.forEach((r) => {
+        const row = r.n;
+        const id = r.text("gigId");
+        const action = r.text("action").toLowerCase();
         if (!id && !action) return;
         if (!action) { blank++; return; }
-        if (action !== "delete") { issues.push(`Row ${row}: Action must be blank or "delete" (found "${text(r[actionCol])}").`); return; }
+        if (action !== "delete") { issues.push(`Row ${row}: Action must be blank or "delete" (found "${r.text("action")}").`); return; }
         if (!id) { issues.push(`Row ${row}: Gig ID is missing.`); return; }
         if (!byId.has(id)) {
           issues.push(`Row ${row}: gig ${id} can't be deleted any more (already deleted, someone applied, or another host).`);
@@ -294,70 +250,6 @@ export default function DeleteHostGigs() {
 
   return (
     <div className="dh">
-      <style>{`
-        .dh { display: flex; flex-direction: column; gap: 14px; }
-        .dh-step { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg, 12px); padding: 18px; }
-        .dh-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
-        .dh-num { width: 24px; height: 24px; border-radius: 999px; background: var(--blue-dim); color: var(--blue); font-size: 12px; font-weight: 700; display: grid; place-items: center; flex-shrink: 0; }
-        .dh-head h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary); }
-        .dh-head p { margin: 3px 0 0; font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; }
-        .dh-head .txt { flex: 1; min-width: 220px; }
-        .dh-search { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
-        .dh-box { flex: 1; min-width: 240px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--bg-elevated); color: var(--text-muted); cursor: text; min-height: 38px; }
-        .dh-box:focus-within { border-color: var(--blue); }
-        .dh-box input { flex: 1; min-width: 160px; border: none; background: none; outline: none; padding: 3px 0; font: inherit; font-size: 13px; color: var(--text-primary); }
-        .dh-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 3px 4px 3px 9px; border-radius: 999px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-primary); max-width: 100%; overflow-wrap: anywhere; }
-        .dh-pill.ok { border-color: var(--green); }
-        .dh-pill.bad { border-color: var(--red); color: var(--red); background: var(--red-dim); }
-        .dh-pill button { display: inline-flex; padding: 2px; border-radius: 999px; color: inherit; opacity: .7; cursor: pointer; }
-        .dh-pill button:hover { opacity: 1; background: var(--bg-hover); }
-        .dh-tip { font-size: 11.5px; color: var(--text-muted); margin-top: 8px; }
-
-        .dh-seg { display: inline-flex; padding: 3px; border-radius: 9px; background: var(--bg-elevated); border: 1px solid var(--border); }
-        .dh-seg button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); cursor: pointer; border: none; background: none; }
-        .dh-seg button.on { background: var(--bg-surface); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,.18); }
-
-        .dh-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12.5px; color: var(--text-secondary); }
-        .dh-link { color: var(--blue); font-weight: 600; cursor: pointer; background: none; border: none; padding: 0; font-size: 12.5px; }
-        .dh-link:disabled { color: var(--text-muted); cursor: default; }
-        .dh-hosts { display: flex; flex-direction: column; gap: 8px; }
-        .dh-host { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md, 10px); cursor: pointer; transition: border-color .12s, background .12s; }
-        .dh-host:hover { background: var(--bg-hover); }
-        .dh-host.on { border-color: var(--red); background: var(--red-dim); }
-        .dh-host.empty { cursor: default; opacity: .65; }
-        .dh-host.empty:hover { background: none; }
-        .dh-host.missing { border-style: dashed; border-color: var(--red); cursor: default; }
-        .dh-host input { accent-color: var(--red); width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; }
-        .dh-av { width: 34px; height: 34px; border-radius: 999px; background: var(--bg-elevated); display: grid; place-items: center; font-weight: 700; font-size: 13px; color: var(--text-secondary); flex-shrink: 0; }
-        .dh-who { flex: 1; min-width: 0; }
-        .dh-who b { display: block; font-size: 13.5px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .dh-who span { display: block; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .dh-count { text-align: right; flex-shrink: 0; }
-        .dh-count b { font-size: 18px; color: var(--text-primary); line-height: 1.1; }
-        .dh-count .lbl { font-size: 11.5px; color: var(--text-secondary); }
-        .dh-count .kept { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-
-        .dh-xl { display: grid; gap: 10px; }
-        .dh-xl-step { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md, 10px); flex-wrap: wrap; }
-        .dh-xl-step .txt { flex: 1; min-width: 200px; font-size: 13px; color: var(--text-primary); }
-        .dh-xl-step .txt small { display: block; color: var(--text-muted); font-size: 12px; margin-top: 2px; }
-        .dh-drop { border: 1.5px dashed var(--border); border-radius: var(--radius-md, 10px); padding: 22px; text-align: center; font-size: 13px; color: var(--text-secondary); cursor: pointer; transition: border-color .12s, background .12s; }
-        .dh-drop:hover, .dh-drop.over { border-color: var(--blue); background: var(--blue-dim); }
-        .dh-file { border: 1px solid var(--border); border-radius: var(--radius-md, 10px); padding: 12px 14px; font-size: 12.5px; color: var(--text-secondary); }
-        .dh-file-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .dh-file-top .name { font-weight: 700; color: var(--text-primary); margin-right: auto; display: inline-flex; gap: 6px; align-items: center; }
-        .dh-mini { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12.5px; }
-        .dh-mini td { padding: 6px 0; border-top: 1px solid var(--border); color: var(--text-primary); }
-        .dh-mini td:last-child { text-align: right; white-space: nowrap; }
-        .dh-issues { margin: 10px 0 0; padding: 0; list-style: none; max-height: 150px; overflow-y: auto; display: grid; gap: 4px; }
-
-        .dh-foot { position: sticky; bottom: 12px; z-index: 5; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-radius: var(--radius-lg, 12px); border: 1px solid var(--border); background: var(--bg-surface); box-shadow: 0 10px 28px rgba(0,0,0,.25); }
-        .dh-foot .sum { flex: 1; min-width: 200px; font-size: 13px; color: var(--text-primary); }
-        .dh-foot .sum small { display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 11.5px; margin-top: 2px; }
-        .dh-chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--bg-elevated); color: var(--text-secondary); }
-        .dh-err { color: var(--red); font-size: 12px; display: flex; gap: 5px; align-items: flex-start; }
-        .dh-list { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--text-secondary); max-height: 180px; overflow-y: auto; }
-      `}</style>
 
       <input ref={fileRef} type="file" accept=".xlsx" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) readSheet(f); }} />
 
@@ -370,40 +262,14 @@ export default function DeleteHostGigs() {
             <p>Enter each host&apos;s <b>exact email</b> or user ID. Only these accounts&apos; gigs can be deleted, so no one else is affected.</p>
           </div>
         </div>
-        <form className="dh-search" onSubmit={(e) => { e.preventDefault(); search(); }}>
-          <label className="dh-box">
-            <Search size={14} />
-            {entries.map((e) => {
-              const l = lookupFor(e);
-              const cls = l ? (l.host ? "ok" : "bad") : "";
-              return (
-                <span key={e} className={`dh-pill ${cls}`}>
-                  {l && !l.host && <UserX size={12} />}
-                  {e}
-                  <button type="button" aria-label={`Remove ${e}`} onClick={(ev) => { ev.preventDefault(); removeEntry(e); }}><X size={11} /></button>
-                </span>
-              );
-            })}
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if ((e.key === "," || e.key === ";") && draft.trim()) { e.preventDefault(); addEntries(draft); }
-                if (e.key === "Backspace" && !draft && entries.length) removeEntry(entries[entries.length - 1]);
-              }}
-              onPaste={(e) => {
-                const t = e.clipboardData.getData("text");
-                if (/[\s,;]/.test(t.trim())) { e.preventDefault(); addEntries(draft + " " + t); }
-              }}
-              onBlur={() => { if (draft.trim()) addEntries(draft); }}
-              placeholder={entries.length ? "Add another email…" : "host@example.com"}
-              aria-label="Host emails or user IDs"
-            />
-          </label>
-          <Button type="submit" variant="primary" size="sm" icon={Search} loading={searching} disabled={(!entries.length && !draft.trim()) || searching}>
-            Find gigs
-          </Button>
-        </form>
+        <HostPicker
+          entries={entries}
+          onChange={setEntries}
+          onRemove={removeEntry}
+          statusOf={(e) => { const l = lookupFor(e); return l ? (l.host ? "ok" : "bad") : undefined; }}
+          onSearch={(list) => search(list)}
+          searching={searching}
+        />
         <div className="dh-tip" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ marginRight: "auto" }}>Press Enter or comma after each email, or paste a list. Up to {MAX_HOSTS} hosts.</span>
           <button type="button" className="dh-link" disabled={readingFile} onClick={() => fileRef.current?.click()}

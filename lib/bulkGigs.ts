@@ -6,7 +6,7 @@
 
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { downloadXlsx } from "@/lib/xlsx";
+import { PICTURE_COLS, downloadGigSheet, parseGigTable } from "@/lib/gigSheet";
 
 /** One spreadsheet row, as sent to /api/admin/bulk-gigs. */
 export interface BulkGigRow {
@@ -26,6 +26,16 @@ export interface BulkGigRow {
   address: string;
   lat: string;
   lng: string;
+  /** Photo file names, as typed (comma / new line separated). */
+  pictures: string;
+}
+
+/** Same limit as the app (GigImagesController.maxImages). */
+export const MAX_PICTURES = 5;
+
+/** File names listed in a row's Pictures cell (any folder part dropped). */
+export function pictureNames(cell: string): string[] {
+  return cell.split(/[,;\n]+/).map((s) => s.trim().split(/[\\/]/).pop()!.trim()).filter(Boolean);
 }
 
 /** Location the server resolved during the check; sent back on create so it isn't geocoded twice. */
@@ -49,28 +59,6 @@ export interface BulkGigPreview {
   location: ResolvedLocation;
 }
 
-// key → header shown in the template. Matching ignores case, spaces and
-// anything in brackets, so "Amount (per worker)" and "amount" both work.
-export const COLUMNS: { key: keyof Omit<BulkGigRow, "scheduledAt" | "scheduleText"> | "date" | "time"; header: string; example: string | number }[] = [
-  { key: "host",        header: "Host (email or user ID)",           example: "host@example.com" },
-  { key: "title",       header: "Title",                             example: "House cleaning" },
-  { key: "description", header: "Description",                       example: "Clean a 2-bedroom condo, supplies provided." },
-  { key: "skill",       header: "Skill",                             example: "Cleaning" },
-  { key: "experience",  header: "Experience (entry/intermediate/expert)", example: "entry" },
-  { key: "payType",     header: "Pay Type (flat/hourly)",            example: "flat" },
-  { key: "amount",      header: "Amount (per worker)",               example: 800 },
-  { key: "workers",     header: "Workers Needed",                    example: 1 },
-  { key: "hours",       header: "Est. Hours (optional)",             example: 3 },
-  { key: "date",        header: "Date (YYYY-MM-DD, blank = Flexible)", example: "" },
-  { key: "time",        header: "Time (HH:MM, 24h)",                 example: "" },
-  { key: "address",     header: "Address",                           example: "Ayala Avenue, Makati, Metro Manila" },
-  { key: "lat",         header: "Latitude (optional)",               example: "" },
-  { key: "lng",         header: "Longitude (optional)",              example: "" },
-];
-
-const norm = (h: string) => h.toLowerCase().replace(/\(.*?\)/g, "").replace(/[^a-z]/g, "");
-const HEADER_KEYS = new Map(COLUMNS.map((c) => [norm(c.header), c.key]));
-
 /** Skill names from the skills library (the app's skill picker), A→Z. */
 export async function loadSkillNames(): Promise<string[]> {
   const snap = await getDocs(collection(db, "skills"));
@@ -82,23 +70,9 @@ export async function loadSkillNames(): Promise<string[]> {
   return [...names].sort((a, b) => a.localeCompare(b));
 }
 
-/** Template with dropdowns: Skill (from the library), Experience and Pay Type. */
+/** The Post template (same workbook format as the Edit / Delete files; see lib/gigSheet.ts). */
 export async function downloadTemplate(skills: string[]) {
-  const col = (key: string) => COLUMNS.findIndex((c) => c.key === key);
-  const example = COLUMNS.map((c) => (c.key === "skill" ? skills[0] ?? "" : c.example));
-  return downloadXlsx(
-    "giggre-bulk-open-gigs-template.xlsx",
-    "Open Gigs",
-    COLUMNS.map((c) => c.header),
-    [example],
-    {
-      dropdowns: [
-        { col: col("skill"), values: skills },
-        { col: col("experience"), values: ["entry", "intermediate", "expert"] },
-        { col: col("payType"), values: ["flat", "hourly"] },
-      ],
-    },
-  );
+  return downloadGigSheet("post", [], { skills });
 }
 
 // ── .xlsx reading ─────────────────────────────────────────────────────────────
@@ -112,8 +86,12 @@ function colIndex(ref: string): number {
   return n - 1;
 }
 
-/** First worksheet of an .xlsx file as rows of cells (numbers stay numbers). */
-export async function readFirstSheet(file: File): Promise<Cell[][]> {
+/**
+ * A worksheet of an .xlsx file as rows of cells (numbers stay numbers): the
+ * sheet named `preferName` if there is one (e.g. "Gigs" in a workbook that
+ * starts with an Instructions sheet), otherwise the first one.
+ */
+export async function readFirstSheet(file: File, preferName?: string): Promise<Cell[][]> {
   const { default: JSZip } = await import("jszip");
   let zip;
   try {
@@ -126,7 +104,9 @@ export async function readFirstSheet(file: File): Promise<Cell[][]> {
   // The first sheet in workbook order (not necessarily sheet1.xml).
   const workbook = parse((await zip.file("xl/workbook.xml")?.async("string")) ?? "");
   const rels = parse((await zip.file("xl/_rels/workbook.xml.rels")?.async("string")) ?? "");
-  const firstRid = workbook.getElementsByTagName("sheet")[0]?.getAttribute("r:id");
+  const sheetEls = Array.from(workbook.getElementsByTagName("sheet"));
+  const wanted = preferName ? sheetEls.find((el) => (el.getAttribute("name") ?? "").trim().toLowerCase() === preferName.toLowerCase()) : undefined;
+  const firstRid = (wanted ?? sheetEls[0])?.getAttribute("r:id");
   let target = "worksheets/sheet1.xml";
   for (const r of Array.from(rels.getElementsByTagName("Relationship"))) {
     if (r.getAttribute("Id") === firstRid) target = r.getAttribute("Target") ?? target;
@@ -199,62 +179,68 @@ function parseTime(v: Cell | undefined): { h: number; min: number } | null | "in
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** Reads the upload into rows. Throws a readable Error for unusable files. */
-export async function readBulkGigFile(file: File): Promise<BulkGigRow[]> {
-  const sheet = await readFirstSheet(file);
-  const headerAt = sheet.findIndex((r) => r.some((c) => text(c) !== ""));
-  if (headerAt < 0) throw new Error("The sheet is empty.");
+/**
+ * Date + Time cells → ISO timestamp in this computer's timezone.
+ * "" = Flexible (both blank), "invalid" = unreadable or a time without a date.
+ */
+export function parseSchedule(dateCell: Cell | undefined, timeCell: Cell | undefined): { scheduledAt: string; scheduleText: string } {
+  const date = parseDate(dateCell);
+  const time = parseTime(timeCell);
+  if (date === "invalid" || time === "invalid") {
+    return { scheduledAt: "invalid", scheduleText: [text(dateCell), text(timeCell)].filter(Boolean).join(" ") };
+  }
+  if (date) {
+    // Same default as the app: 8:00 AM when no time is picked.
+    const t = time ?? { h: 8, min: 0 };
+    return {
+      scheduledAt: new Date(date.y, date.m - 1, date.d, t.h, t.min).toISOString(),
+      scheduleText: `${date.y}-${pad(date.m)}-${pad(date.d)} ${pad(t.h)}:${pad(t.min)}`,
+    };
+  }
+  if (time) return { scheduledAt: "invalid", scheduleText: `${text(timeCell)} (no date)` };
+  return { scheduledAt: "", scheduleText: "Flexible" };
+}
 
-  const keyAt = new Map<string, number>();
-  sheet[headerAt].forEach((h, i) => {
-    const key = HEADER_KEYS.get(norm(text(h)));
-    if (key && !keyAt.has(key)) keyAt.set(key, i);
-  });
-  const missing = ["host", "title", "description", "skill", "amount", "address"].filter((k) => !keyAt.has(k));
-  if (missing.length) {
-    const names = missing.map((k) => COLUMNS.find((c) => c.key === k)!.header);
-    throw new Error(`Missing column${names.length > 1 ? "s" : ""}: ${names.join(", ")}. Download the template to see the expected columns.`);
+/**
+ * Reads the upload into rows (and each row's Excel row number, to match
+ * pictures inserted in the sheet). Throws a readable Error for unusable files.
+ */
+export async function readBulkGigFile(file: File): Promise<{ rows: BulkGigRow[]; sheetRows: number[] }> {
+  const sheet = await readFirstSheet(file, "Gigs");
+  const table = parseGigTable(sheet, ["host", "title", "description", "skill", "amount", "address"], 3);
+
+  // An Edit / Delete file lists existing gigs; posting it would duplicate them.
+  const existing = table.rows.filter((r) => r.text("gigId"));
+  if (existing.length) {
+    const nums = existing.slice(0, 5).map((r) => r.n).join(", ");
+    throw new Error(`Row${existing.length > 1 ? "s" : ""} ${nums}${existing.length > 5 ? "…" : ""} already ${existing.length > 1 ? "have" : "has"} a Gig ID, so ${existing.length > 1 ? "they are" : "it's an"} existing gig${existing.length > 1 ? "s" : ""}. Use Edit gigs to change them, or clear Gig ID and Version to post copies as new gigs.`);
   }
 
-  const get = (r: Cell[], key: string) => (keyAt.has(key) ? r[keyAt.get(key)!] : undefined);
-  const rows: BulkGigRow[] = [];
-  for (const r of sheet.slice(headerAt + 1)) {
-    if (!r.some((c) => text(c) !== "")) continue; // blank line
-
-    const date = parseDate(get(r, "date"));
-    const time = parseTime(get(r, "time"));
-    let scheduledAt = "";
-    let scheduleText = "Flexible";
-    if (date === "invalid" || time === "invalid") {
-      scheduledAt = "invalid";
-      scheduleText = [text(get(r, "date")), text(get(r, "time"))].filter(Boolean).join(" ");
-    } else if (date) {
-      // Same default as the app: 8:00 AM when no time is picked.
-      const t = time ?? { h: 8, min: 0 };
-      scheduledAt = new Date(date.y, date.m - 1, date.d, t.h, t.min).toISOString();
-      scheduleText = `${date.y}-${pad(date.m)}-${pad(date.d)} ${pad(t.h)}:${pad(t.min)}`;
-    } else if (time) {
-      scheduledAt = "invalid";
-      scheduleText = `${text(get(r, "time"))} (no date)`;
-    }
-
-    rows.push({
-      host: text(get(r, "host")),
-      title: text(get(r, "title")),
-      description: text(get(r, "description")),
-      skill: text(get(r, "skill")),
-      experience: text(get(r, "experience")),
-      payType: text(get(r, "payType")),
-      amount: text(get(r, "amount")),
-      workers: text(get(r, "workers")),
-      hours: text(get(r, "hours")),
+  const rows: BulkGigRow[] = table.rows.map((r) => {
+    const { scheduledAt, scheduleText } = parseSchedule(r.get("date"), r.get("time"));
+    return {
+      host: r.text("host"),
+      title: r.text("title"),
+      description: r.text("description"),
+      skill: r.text("skill"),
+      experience: r.text("experience"),
+      payType: r.text("payType"),
+      amount: r.text("amount"),
+      workers: r.text("workers"),
+      hours: r.text("hours"),
       scheduledAt,
       scheduleText,
-      address: text(get(r, "address")),
-      lat: text(get(r, "lat")),
-      lng: text(get(r, "lng")),
-    });
-  }
+      address: r.text("address"),
+      lat: r.text("lat"),
+      lng: r.text("lng"),
+      // A picture placed in the cell reads as a placeholder value
+      // (#VALUE! in Excel, =DISPIMG("ID_…") in WPS); the picture itself is read separately.
+      pictures: PICTURE_COLS.map((k) => r.text(k))
+        .filter((t) => t && !/^#[A-Z0-9/!?]+$/i.test(t) && !/DISPIMG\(/i.test(t))
+        .join(", "),
+    };
+  });
+  const sheetRows = table.rows.map((r) => r.n);
   if (rows.length === 0) throw new Error("No gigs found under the header row.");
-  return rows;
+  return { rows, sheetRows };
 }

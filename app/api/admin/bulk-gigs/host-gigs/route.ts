@@ -13,6 +13,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import type { DocumentData, Timestamp } from "firebase-admin/firestore";
 import { findHost } from "@/lib/findHost.server";
+import { sheetGig } from "@/lib/bulkGigs.server";
+import type { SheetGig } from "@/lib/gigSheet";
 
 export const maxDuration = 60;
 
@@ -20,14 +22,9 @@ const MAX_HOSTS = 20;
 const MAX_DELETE = 500;
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
-export interface HostGig {
-  id: string;
-  hostId: string;
-  title: string;
-  workers: number;
+/** A deletable gig, in the shared workbook format (lib/gigSheet.ts) plus a few extras. */
+export interface HostGig extends SheetGig {
   createdAt: number | null;
-  scheduledAt: number | null;
-  address: string;
   /** Posted from Bulk Open Gigs. */
   bulk: boolean;
 }
@@ -87,16 +84,7 @@ async function searchHost(query: string, seen: Set<string>): Promise<{ lookup: H
     if (blockedReason(g, false)) return null;
     const hasWorkers = !(await d.ref.collection("workers").limit(1).get()).empty;
     if (hasWorkers) return null;
-    const gig: HostGig = {
-      id: d.id,
-      hostId: doc.id,
-      title: String(g.title ?? ""),
-      workers: Number(g.workerSlots ?? 1),
-      createdAt: millis(g.createdAt),
-      scheduledAt: millis(g.scheduledDate),
-      address: String(g.address ?? ""),
-      bulk: !!g.bulkUpload,
-    };
+    const gig: HostGig = { ...sheetGig(d.id, g, host), createdAt: millis(g.createdAt), bulk: !!g.bulkUpload };
     return gig;
   }));
   const gigs = checked.filter((g): g is HostGig => g !== null);
