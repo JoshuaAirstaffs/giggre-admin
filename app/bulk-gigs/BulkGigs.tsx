@@ -10,12 +10,13 @@ import { downloadXlsx } from "@/lib/xlsx";
 import { writeLog } from "@/lib/activitylog";
 import { useAuth } from "@/context/AuthContext";
 import { readSheetPictures } from "@/lib/xlsxImages";
+import { photoApi, shrinkPhoto } from "@/lib/gigPhotos";
 import { MAX_PICTURES, downloadTemplate, loadSkillNames, pictureNames, readBulkGigFile, type BulkGigPreview, type BulkGigRow } from "@/lib/bulkGigs";
 
 type Status =
   | { state: "checking" }
   | { state: "ready"; preview: BulkGigPreview }
-  | { state: "invalid"; errors: string[]; skillNotFound?: boolean }
+  | { state: "invalid"; errors: string[]; skillNotFound?: boolean; locationNotFound?: boolean }
   | { state: "creating"; preview: BulkGigPreview }
   | { state: "created"; preview: BulkGigPreview; gigId: string }
   | { state: "failed"; preview?: BulkGigPreview; errors: string[] };
@@ -34,43 +35,8 @@ async function callRow(body: object) {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
   });
-  const data = await readApiJson<{ ok?: boolean; errors?: string[]; skillNotFound?: boolean; preview?: BulkGigPreview; gigId?: string }>(res);
+  const data = await readApiJson<{ ok?: boolean; errors?: string[]; skillNotFound?: boolean; locationNotFound?: boolean; preview?: BulkGigPreview; gigId?: string }>(res);
   if (!res.ok) return { ok: false, errors: [data.error ?? `Request failed (HTTP ${res.status}).`] };
-  return data;
-}
-
-// ── Photos ──────────────────────────────────────────────────────────────────
-
-const PHOTO_MAX_SIDE = 1600;
-
-/** Shrinks a photo to at most 1600px on its longest side, as JPEG (keeps uploads small). */
-async function shrinkPhoto(file: File): Promise<Blob> {
-  let bmp: ImageBitmap;
-  try {
-    bmp = await createImageBitmap(file);
-  } catch {
-    throw new Error(`${file.name} couldn't be opened. Use JPG, PNG or WebP photos.`);
-  }
-  const scale = Math.min(1, PHOTO_MAX_SIDE / Math.max(bmp.width, bmp.height));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(bmp.width * scale);
-  canvas.height = Math.round(bmp.height * scale);
-  canvas.getContext("2d")!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-  bmp.close();
-  const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.85));
-  if (!blob) throw new Error(`${file.name} couldn't be converted.`);
-  return blob;
-}
-
-async function photoApi(method: "POST" | "DELETE", query: string, body?: Blob): Promise<{ url?: string; path?: string }> {
-  const token = await auth.currentUser?.getIdToken();
-  const res = await fetch(`/api/admin/bulk-gigs/photo?${query}`, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": body.type } : {}) },
-    body,
-  });
-  const data = await readApiJson<{ url?: string; path?: string }>(res);
-  if (!res.ok) throw new Error(data.error ?? `Photo upload failed (HTTP ${res.status}).`);
   return data;
 }
 
@@ -130,7 +96,7 @@ export default function BulkGigs() {
       const r = await callRow({ row, create: false });
       return r.ok && r.preview
         ? { state: "ready", preview: r.preview }
-        : { state: "invalid", errors: r.errors?.length ? r.errors : ["Check failed."], skillNotFound: r.skillNotFound };
+        : { state: "invalid", errors: r.errors?.length ? r.errors : ["Check failed."], skillNotFound: r.skillNotFound, locationNotFound: r.locationNotFound };
     } catch (e: any) {
       return { state: "invalid", errors: [e.message ?? "Check failed."] };
     }
@@ -141,6 +107,16 @@ export default function BulkGigs() {
     const it = items.find((x) => x.n === n);
     if (!it || !skill) return;
     const row = { ...it.row, skill };
+    setItems((xs) => xs.map((x) => (x.n === n ? { ...x, row, status: { state: "checking" } } : x)));
+    update(n, await checkRow(row));
+  };
+
+  // Coordinates typed in for a row whose address wasn't found re-check just that row
+  // (the address stays as the gig's address; the pin uses these coordinates).
+  const fixLocation = async (n: number, lat: string, lng: string) => {
+    const it = items.find((x) => x.n === n);
+    if (!it) return;
+    const row = { ...it.row, lat, lng };
     setItems((xs) => xs.map((x) => (x.n === n ? { ...x, row, status: { state: "checking" } } : x)));
     update(n, await checkRow(row));
   };
@@ -313,6 +289,12 @@ export default function BulkGigs() {
         .bg-select { margin-top: 6px; width: 100%; max-width: 220px; padding: 6px 8px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 12.5px; font-family: inherit; }
         .bg-select:focus { outline: none; border-color: var(--blue); }
         .bg-photos-missing { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 12px; margin-bottom: 10px; border: 1px solid var(--amber); background: var(--amber-dim); border-radius: var(--radius-sm, 8px); font-size: 12.5px; color: var(--text-primary); }
+        .bg-ll { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-width: 260px; }
+        .bg-ll-row { display: flex; gap: 6px; }
+        .bg-ll input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 12.5px; font-family: inherit; }
+        .bg-ll input:focus { outline: none; border-color: var(--blue); }
+        .bg-ll input.bad { border-color: var(--red); }
+        .bg-ll a { font-size: 11.5px; color: var(--blue); }
         .bg-spin { animation: bg-spin .8s linear infinite; }
         @keyframes bg-spin { to { transform: rotate(360deg); } }
       `}</style>
@@ -454,6 +436,9 @@ export default function BulkGigs() {
                             {skills.map((s) => <option key={s} value={s}>{s}</option>)}
                           </select>
                         )}
+                        {status.state === "invalid" && status.locationNotFound && (
+                          <LatLngForm address={row.address} lat={row.lat} lng={row.lng} disabled={!!busy} onSubmit={(lat, lng) => fixLocation(n, lat, lng)} />
+                        )}
                       </td>
                     </tr>
                   );
@@ -464,5 +449,53 @@ export default function BulkGigs() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Two numbers from text like "14.5995, 120.9842" (what Google Maps copies). */
+function splitCoords(text: string): [string, string] | null {
+  const m = text.trim().match(/^\(?\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*\)?$/);
+  return m ? [m[1], m[2]] : null;
+}
+
+const validLat = (v: string) => v.trim() !== "" && Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 90;
+const validLng = (v: string) => v.trim() !== "" && Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 180;
+
+/** Latitude/Longitude for a row whose address couldn't be found on the map. */
+function LatLngForm({ address, lat: lat0, lng: lng0, disabled, onSubmit }: {
+  address: string; lat: string; lng: string; disabled: boolean; onSubmit: (lat: string, lng: string) => void;
+}) {
+  const [lat, setLat] = useState(lat0);
+  const [lng, setLng] = useState(lng0);
+  const [tried, setTried] = useState(false);
+  const ok = validLat(lat) && validLng(lng);
+  // Pasting "lat, lng" into either box fills both.
+  const onPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pair = splitCoords(e.clipboardData.getData("text"));
+    if (!pair) return;
+    e.preventDefault();
+    setLat(pair[0]);
+    setLng(pair[1]);
+  };
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setTried(true);
+    if (ok && !disabled) onSubmit(lat.trim(), lng.trim());
+  };
+  const search = address ? `https://www.google.com/maps/search/${encodeURIComponent(address)}` : "https://www.google.com/maps";
+  return (
+    <form className="bg-ll" onSubmit={submit}>
+      <div className="bg-ll-row">
+        <input aria-label="Latitude" placeholder="Latitude" inputMode="decimal" value={lat} disabled={disabled}
+          className={tried && !validLat(lat) ? "bad" : ""} onChange={(e) => setLat(e.target.value)} onPaste={onPaste} />
+        <input aria-label="Longitude" placeholder="Longitude" inputMode="decimal" value={lng} disabled={disabled}
+          className={tried && !validLng(lng) ? "bad" : ""} onChange={(e) => setLng(e.target.value)} onPaste={onPaste} />
+        <Button type="submit" variant="secondary" size="sm" disabled={disabled}>Use</Button>
+      </div>
+      <a href={search} target="_blank" rel="noreferrer">
+        Find it on Google Maps
+      </a>
+      <span className="bg-sub" style={{ marginTop: 0 }}>Right-click the spot → click the numbers to copy them, then paste here.</span>
+    </form>
   );
 }

@@ -5,6 +5,9 @@
 //            storage.rules: images only, 8 MB) and returns its download URL
 //   DELETE ?path=…     → removes a photo this route stored (used when the gig
 //                        then couldn't be created, so no orphan files stay)
+//   GET    ?src=<url>  → the bytes of an existing gig photo (a gig_images/…
+//                        download URL in this project's bucket), so the Edit
+//                        sheet can show the gig's current photos
 //
 // The browser shrinks photos before sending them, so a request stays well
 // under the hosting body limit.
@@ -75,5 +78,26 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? "Delete failed." }, { status: 500 });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  try {
+    const auth = await authorize(req);
+    if ("error" in auth) return auth.error;
+    const src = req.nextUrl.searchParams.get("src") ?? "";
+    const bucket = adminStorage.bucket();
+    const prefix = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/`;
+    if (!src.startsWith(prefix)) return NextResponse.json({ error: "Not a photo in this project." }, { status: 400 });
+    const path = decodeURIComponent(src.slice(prefix.length).split("?")[0]);
+    if (!/^gig_images\/[A-Za-z0-9_-]{1,128}\/[^/]{1,200}$/.test(path)) return NextResponse.json({ error: "Not a gig photo." }, { status: 400 });
+    const file = bucket.file(path);
+    const [[data], [meta]] = await Promise.all([file.download(), file.getMetadata()]);
+    const type = String(meta.contentType ?? "image/jpeg");
+    if (!type.startsWith("image/")) return NextResponse.json({ error: "Not an image." }, { status: 400 });
+    return new NextResponse(new Uint8Array(data), { headers: { "Content-Type": type, "Cache-Control": "private, max-age=300" } });
+  } catch (err: any) {
+    const code = err?.code === 404 ? 404 : 500;
+    return NextResponse.json({ error: code === 404 ? "Photo not found." : err?.message ?? "Couldn't load the photo." }, { status: code });
   }
 }

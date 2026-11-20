@@ -8,12 +8,13 @@ export type Cell = string | number | null | undefined;
 /** Named cell styles (see STYLES below). */
 export type StyleName =
   | "default" | "title" | "subtitle" | "bold" | "text" | "textWrap"
-  | "colHead" | "hint" | "data" | "dataSystem" | "example"
+  | "colHead" | "hint" | "data" | "dataSystem" | "example" | "link"
   | `band:${BandColor}` | `chip:${BandColor}`;
 
 export type BandColor = "blue" | "grey" | "green" | "orange" | "red" | "navy" | "purple";
 
-export interface SCell { v: Cell; s?: StyleName }
+/** A cell; with `f` it's a formula (e.g. HYPERLINK) and `v` is its shown value. */
+export interface SCell { v: Cell; s?: StyleName; f?: string }
 
 export interface StyledSheet {
   name: string;
@@ -28,7 +29,24 @@ export interface StyledSheet {
   /** Dropdowns: a range on this sheet and the allowed values. */
   dropdowns?: { range: string; values: string[] }[];
   tabColor?: string;
+  /** Pictures shown over cells (anchored to a cell, sized in pixels). */
+  images?: SheetImage[];
 }
+
+export interface SheetImage {
+  /** 1-based row and 0-based column of the cell the picture sits in. */
+  row: number;
+  col: number;
+  data: Uint8Array;
+  ext: "jpeg" | "png";
+  width: number;
+  height: number;
+  /** Stored as the picture's name and alt text (lets the reader recognise it). */
+  name: string;
+}
+
+const EMU = 9525; // per pixel
+const PAD_PX = 4;
 
 const BAND: Record<BandColor, string> = {
   blue: "FF2E7BE0", grey: "FF6B7280", green: "FF2E9E5B", orange: "FFE8833A", red: "FFC0392B", navy: "FF1F3A5F", purple: "FF5B4A8B",
@@ -48,6 +66,7 @@ const FONTS = [
   `<font><i/><sz val="9"/><color rgb="FF7F7F7F"/><name val="Calibri"/></font>`,        // 4 hint
   `<font><sz val="11"/><color rgb="FF6B7280"/><name val="Calibri"/></font>`,           // 5 grey
   `<font><sz val="11"/><color rgb="FF4B5563"/><name val="Calibri"/></font>`,           // 6 subtitle
+  `<font><u/><sz val="11"/><color rgb="FF2E7BE0"/><name val="Calibri"/></font>`,       // 7 link
 ];
 
 const fill = (rgb: string) => `<fill><patternFill patternType="solid"><fgColor rgb="${rgb}"/><bgColor indexed="64"/></patternFill></fill>`;
@@ -83,6 +102,7 @@ const XF: Record<string, Xf> = {
   data:       { font: 0, fill: 0, border: 1, v: "top" },
   dataSystem: { font: 5, fill: 4, border: 1, v: "top" },
   example:    { font: 0, fill: 5, border: 1, v: "top", wrap: true },
+  link:       { font: 7, fill: 0, border: 1, v: "top" },
 };
 for (const c of COLORS) {
   XF[`band:${c}`] = { font: 3, fill: bandFill(c), border: 1, h: "left", v: "center" };
@@ -126,12 +146,44 @@ function cellXml(c: SCell | Cell, ref: string): string {
   const st = styleIndex(cell.s);
   const s = st ? ` s="${st}"` : "";
   const v = cell.v;
+  if (cell.f) return `<c r="${ref}"${s} t="str"><f>${esc(cell.f)}</f><v>${esc(String(v ?? ""))}</v></c>`;
   if (v == null || v === "") return st ? `<c r="${ref}"${s}/>` : "";
   if (typeof v === "number" && Number.isFinite(v)) return `<c r="${ref}"${s}><v>${v}</v></c>`;
   return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${esc(String(v))}</t></is></c>`;
 }
 
 const safeName = (n: string) => n.replace(/[\\/?*[\]:]/g, "").slice(0, 31) || "Sheet";
+
+/** Column width (characters) → pixels, as Excel draws it with Calibri 11. */
+const colPx = (chars: number) => Math.floor(chars * 7 + 5);
+const DEFAULT_COL_CHARS = 8.43;
+const DEFAULT_ROW_PT = 15;
+
+function drawingXml(sh: StyledSheet, images: SheetImage[], firstRel: number): string {
+  // Absolute position too (a:xfrm), which some viewers use instead of the anchor.
+  const xOf = (col: number) => {
+    let px = 0;
+    for (let c = 0; c < col; c++) px += colPx(sh.widths?.[c] ?? DEFAULT_COL_CHARS);
+    return px;
+  };
+  const yOf = (row1: number) => {
+    let pt = 0;
+    for (let r = 0; r < row1 - 1; r++) pt += sh.rows[r]?.height ?? DEFAULT_ROW_PT;
+    return Math.round((pt * 96) / 72);
+  };
+  const anchors = images.map((im, i) => {
+    const cx = Math.round(im.width * EMU), cy = Math.round(im.height * EMU);
+    const ox = (xOf(im.col) + PAD_PX) * EMU, oy = (yOf(im.row) + PAD_PX) * EMU;
+    const name = esc(im.name);
+    // Two-cell anchor (what Excel writes; every app reads it), starting and ending inside the same cell.
+    return `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${im.col}</xdr:col><xdr:colOff>${PAD_PX * EMU}</xdr:colOff><xdr:row>${im.row - 1}</xdr:row><xdr:rowOff>${PAD_PX * EMU}</xdr:rowOff></xdr:from>` +
+      `<xdr:to><xdr:col>${im.col}</xdr:col><xdr:colOff>${PAD_PX * EMU + cx}</xdr:colOff><xdr:row>${im.row - 1}</xdr:row><xdr:rowOff>${PAD_PX * EMU + cy}</xdr:rowOff></xdr:to><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${i + 2}" name="${name}" descr="${name}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>` +
+      `<xdr:blipFill><a:blip r:embed="rId${firstRel + i}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>` +
+      `<xdr:spPr><a:xfrm><a:off x="${ox}" y="${oy}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:twoCellAnchor>`;
+  });
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${anchors.join("")}</xdr:wsDr>`;
+}
 
 function sheetXml(sh: StyledSheet, listRefs: string[]): string {
   const f = sh.freeze;
@@ -153,9 +205,9 @@ function sheetXml(sh: StyledSheet, listRefs: string[]): string {
     : "";
   const tab = sh.tabColor ? `<sheetPr><tabColor rgb="${sh.tabColor}"/></sheetPr>` : "";
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${tab}` +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${tab}` +
     `<sheetViews><sheetView workbookViewId="0">${pane}</sheetView></sheetViews>` +
-    `${cols}<sheetData>${rows}</sheetData>${merges}${dv}</worksheet>`;
+    `${cols}<sheetData>${rows}</sheetData>${merges}${dv}${sh.images?.length ? `<drawing r:id="rId1"/>` : ""}</worksheet>`;
 }
 
 /** Builds the workbook and starts a browser download. Dropdown values live on a hidden "Lists" sheet. */
@@ -185,6 +237,8 @@ export async function downloadWorkbook(filename: string, sheets: StyledSheet[]) 
     `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
     `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
     `<Default Extension="xml" ContentType="application/xml"/>` +
+    `<Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="png" ContentType="image/png"/>` +
+    all.map((sh, i) => (sh.images?.length ? `<Override PartName="/xl/drawings/drawing${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>` : "")).join("") +
     `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
     all.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("") +
     `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` +
@@ -209,6 +263,28 @@ export async function downloadWorkbook(filename: string, sheets: StyledSheet[]) 
     `</Relationships>`);
   add("xl/styles.xml", stylesXml());
   all.forEach((sh, i) => add(`xl/worksheets/sheet${i + 1}.xml`, sheetXml(sh, refsPerSheet[i] ?? [])));
+
+  // Pictures: sheet → drawing → media.
+  let media = 0;
+  all.forEach((sh, i) => {
+    const images = sh.images ?? [];
+    if (!images.length) return;
+    const n = i + 1;
+    add(`xl/worksheets/_rels/sheet${n}.xml.rels`,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${n}.xml"/>` +
+      `</Relationships>`);
+    add(`xl/drawings/drawing${n}.xml`, drawingXml(sh, images, 1));
+    const rels = images.map((im, j) => {
+      media++;
+      zip.file(`xl/media/image${media}.${im.ext}`, im.data);
+      return `<Relationship Id="rId${j + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${media}.${im.ext}"/>`;
+    });
+    add(`xl/drawings/_rels/drawing${n}.xml.rels`,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join("")}</Relationships>`);
+  });
 
   const blob = await zip.generateAsync({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   const url = URL.createObjectURL(blob);

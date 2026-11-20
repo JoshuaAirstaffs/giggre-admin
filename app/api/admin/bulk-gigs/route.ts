@@ -140,7 +140,9 @@ export async function POST(req: NextRequest) {
     }
 
     if (errors.length > 0 || !host || typeof location === "string") {
-      return NextResponse.json({ ok: false, errors, skillNotFound });
+      // The page then offers a Latitude/Longitude form for that row.
+      const locationNotFound = typeof location === "string";
+      return NextResponse.json({ ok: false, errors, skillNotFound, locationNotFound });
     }
 
     const preview: BulkGigPreview = {

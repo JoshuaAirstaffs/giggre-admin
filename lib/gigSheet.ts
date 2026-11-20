@@ -45,7 +45,23 @@ export interface SheetGig {
   lat: number | null;
   lng: number | null;
   version: string;
+  /** Current photo URLs (gig `images`), shown as "Current photo N" links. */
+  images?: string[];
 }
+
+/** Text of a cell that keeps the gig's existing photo N (Edit files). */
+export const currentPhotoLabel = (n: number) => `Current photo ${n}`;
+export const CURRENT_PHOTO_RE = /^current photo\s*(\d)$/i;
+/** Name / alt text of an existing photo embedded in an Edit sheet. */
+export const currentPhotoPicName = (n: number) => `giggre-current-photo-${n}`;
+export const CURRENT_PHOTO_PIC_RE = /giggre-current-photo-(\d)/i;
+
+/** A gig photo shrunk for the sheet. */
+export interface SheetPhoto { data: Uint8Array; width: number; height: number }
+
+/** Shown size of a photo inside a Picture cell (px) and the row height that fits it (pt). */
+const PHOTO_BOX = 72;
+const PHOTO_ROW_PT = 62;
 
 type Need = "Required" | "Optional" | "Don't change" | "Can't change" | "Not used";
 
@@ -143,7 +159,7 @@ function needFor(kind: SheetKind, key: GigCol, section: Section): Need | string 
   if (kind === "delete") return key === "action" ? "Required" : key === "host" ? "Don't change" : "Reference only";
   if (kind === "edit") {
     if (key === "skill" || key === "workers") return "Can't change";
-    if (PICTURE_COLS.includes(key)) return "Not used";
+    if (PICTURE_COLS.includes(key)) return "Optional";
   }
   if (section.key === "location") return key === "address" ? "Required" : "Optional";
   return section.need;
@@ -163,7 +179,8 @@ const STEPS: Record<SheetKind, string[]> = {
   ],
   edit: [
     "On the Gigs sheet, change only the cells you want. Don't change Gig ID, Host or Version.",
-    "Skill and Workers Needed can't be changed. Pictures isn't used when editing.",
+    "Skill and Workers Needed can't be changed.",
+    "Photos: Picture 1 … Picture 5 show the gig's current photos. Leave a photo to keep it. To remove one, click it and press Delete. To replace one, delete it and put a new picture in that cell. Empty Picture cells can take new photos (up to 5).",
     "Upload the file on Bulk Open Gigs → Edit gigs. You'll see every change (old → new) before anything is saved.",
     "A gig someone applied to, or that changed after you downloaded this file, isn't changed. Download a fresh copy for those.",
   ],
@@ -229,7 +246,7 @@ function instructionsSheet(kind: SheetKind): StyledSheet {
   return { name: "Instructions", rows, merges, widths: [30, 16, 70, 34], tabColor: "FF2E7BE0" };
 }
 
-function gigsSheet(kind: SheetKind, gigs: SheetGig[], skills: string[] | undefined): StyledSheet {
+function gigsSheet(kind: SheetKind, gigs: SheetGig[], skills: string[] | undefined, photos?: Map<string, (SheetPhoto | null)[]>): StyledSheet {
   const cols = columnsFor(kind);
   const idx = (k: GigCol) => cols.indexOf(k);
   const merges: string[] = [];
@@ -244,9 +261,33 @@ function gigsSheet(kind: SheetKind, gigs: SheetGig[], skills: string[] | undefin
   const heads: SCell[] = cols.map((k) => ({ v: COL[k].header, s: "colHead" }));
   const hints: SCell[] = cols.map((k) => ({ v: COL[k].hint, s: "hint" }));
   const system = new Set<GigCol>(["gigId", "version"]);
-  const data = gigs.map((g) => {
+  const images: NonNullable<StyledSheet["images"]> = [];
+  const data = gigs.map((g, gi) => {
     const v = gigValues(g);
-    return { cells: cols.map((k) => ({ v: v[k] ?? null, s: system.has(k) ? "dataSystem" : "data" }) as SCell) };
+    const sheetRow = gi + 4;
+    let hasPhoto = false;
+    const cells = cols.map((k) => {
+      const p = PICTURE_COLS.indexOf(k);
+      const url = p >= 0 ? g.images?.[p] : undefined;
+      if (url) {
+        // The photo itself sits in the cell; its name tells the upload to keep it.
+        const thumb = photos?.get(g.id)?.[p];
+        if (thumb) {
+          const scale = Math.min(1, PHOTO_BOX / Math.max(thumb.width, thumb.height));
+          images.push({
+            row: sheetRow, col: cols.indexOf(k), data: thumb.data, ext: "jpeg",
+            width: Math.round(thumb.width * scale), height: Math.round(thumb.height * scale),
+            name: currentPhotoPicName(p + 1),
+          });
+          hasPhoto = true;
+          return { v: null, s: "data" } as SCell;
+        }
+        // Couldn't load it: a link instead, which also means "keep".
+        if (!url.includes('"')) return { v: currentPhotoLabel(p + 1), f: `HYPERLINK("${url}","${currentPhotoLabel(p + 1)}")`, s: "link" } as SCell;
+      }
+      return { v: v[k] ?? null, s: system.has(k) ? "dataSystem" : "data" } as SCell;
+    });
+    return { cells, height: hasPhoto ? PHOTO_ROW_PT : undefined };
   });
 
   const range = (k: GigCol) => `${colName(idx(k))}4:${colName(idx(k))}2000`;
@@ -265,14 +306,15 @@ function gigsSheet(kind: SheetKind, gigs: SheetGig[], skills: string[] | undefin
     freeze: { row: 4, col: idx("title") + 2 },
     dropdowns,
     tabColor: kind === "delete" ? "FFC0392B" : "FF2E9E5B",
+    images,
   };
 }
 
 /** Downloads the Post template (no gigs) or an Edit / Delete file of `gigs`. */
-export function downloadGigSheet(kind: SheetKind, gigs: SheetGig[] = [], opts: { skills?: string[] } = {}) {
+export function downloadGigSheet(kind: SheetKind, gigs: SheetGig[] = [], opts: { skills?: string[]; photos?: Map<string, (SheetPhoto | null)[]> } = {}) {
   const day = new Date().toISOString().slice(0, 10);
   const name = kind === "post" ? "giggre-bulk-post-gigs-template.xlsx" : `giggre-${kind}-gigs-${day}.xlsx`;
-  return downloadWorkbook(name, [instructionsSheet(kind), gigsSheet(kind, gigs, opts.skills)]);
+  return downloadWorkbook(name, [instructionsSheet(kind), gigsSheet(kind, gigs, opts.skills, opts.photos)]);
 }
 
 // ── Read ─────────────────────────────────────────────────────────────────────
@@ -289,7 +331,7 @@ export interface SheetRow {
  * skips the grey hint row and blank rows, and returns the gig rows.
  * Throws a readable Error when `required` columns are missing.
  */
-export function parseGigTable(sheet: Cell[][], required: GigCol[], minCols = 2): { rows: SheetRow[]; has: (k: GigCol) => boolean } {
+export function parseGigTable(sheet: Cell[][], required: GigCol[], minCols = 2): { rows: SheetRow[]; has: (k: GigCol) => boolean; colOf: (k: GigCol) => number | undefined } {
   let headerAt = -1;
   const keyAt = new Map<GigCol, number>();
   for (let r = 0; r < Math.min(sheet.length, 30) && headerAt < 0; r++) {
@@ -313,5 +355,5 @@ export function parseGigTable(sheet: Cell[][], required: GigCol[], minCols = 2):
     const get = (k: GigCol) => (keyAt.has(k) ? r[keyAt.get(k)!] : undefined);
     rows.push({ n: headerAt + i + 2, get, text: (k) => text(get(k)) });
   });
-  return { rows, has: (k) => keyAt.has(k) };
+  return { rows, has: (k) => keyAt.has(k), colOf: (k) => keyAt.get(k) };
 }

@@ -18,6 +18,8 @@ export interface SheetPicture {
   /** Column (0-based), to keep a row's pictures in left-to-right order. */
   col: number;
   file: File;
+  /** The picture's name / alt text, when the file keeps one. */
+  label?: string;
 }
 
 const NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -82,14 +84,14 @@ export async function readSheetPictures(file: File, preferName?: string): Promis
   const pictures: SheetPicture[] = [];
   let skipped = 0;
   let n = 0;
-  const media = async (path: string, row: number, col: number) => {
+  const media = async (path: string, row: number, col: number, label?: string) => {
     const ext = (path.split(".").pop() ?? "").toLowerCase();
     const type = MIME[ext];
     const data = await zip.file(path)?.async("blob");
     if (!data) return;
     if (!type) { skipped++; return; }
     n++;
-    pictures.push({ row, col, file: new File([data], `excel-row${row}-${n}.${ext === "jpeg" ? "jpg" : ext}`, { type }) });
+    pictures.push({ row, col, label, file: new File([data], `excel-row${row}-${n}.${ext === "jpeg" ? "jpg" : ext}`, { type }) });
   };
 
   // 1) Floating pictures (drawing anchors).
@@ -104,9 +106,11 @@ export async function readSheetPictures(file: File, preferName?: string): Promis
       const row = Number(from ? byLocal(from, "row")[0]?.textContent : NaN);
       const col = Number(from ? byLocal(from, "col")[0]?.textContent : 0) || 0;
       if (!Number.isFinite(row)) continue;
+      const nv = byLocal(anchor, "cNvPr")[0];
+      const label = `${nv?.getAttribute("name") ?? ""} ${nv?.getAttribute("descr") ?? ""} ${nv?.getAttribute("title") ?? ""}`.trim();
       for (const blip of byLocal(anchor, "blip")) {
         const target = drawingRels.get(rAttr(blip, "embed") ?? "")?.target;
-        if (target) await media(target, row + 1, col);
+        if (target) await media(target, row + 1, col, label);
       }
     }
   }
@@ -169,16 +173,17 @@ export async function readSheetPictures(file: File, preferName?: string): Promis
       [...wbRels.values()].find((r) => /cellimage/i.test(r.type) || /cellimages\.xml$/i.test(r.target))?.target ?? "xl/cellimages.xml";
     const doc = await xml(cellImagesPart);
     const imgRels = await relsOf(cellImagesPart);
-    const byId = new Map<string, string>();
+    const byId = new Map<string, { target: string; label: string }>();
     for (const ci of doc ? byLocal(doc, "cellImage") : []) {
-      const name = byLocal(ci, "cNvPr")[0]?.getAttribute("name") ?? "";
+      const nv = byLocal(ci, "cNvPr")[0];
+      const name = nv?.getAttribute("name") ?? "";
       const target = imgRels.get(rAttr(byLocal(ci, "blip")[0] ?? ci, "embed") ?? "")?.target;
-      if (name && target) byId.set(name, target);
+      if (name && target) byId.set(name, { target, label: `${nv?.getAttribute("descr") ?? ""} ${nv?.getAttribute("title") ?? ""}`.trim() });
     }
     for (const { ref, id } of dispCells) {
-      const target = byId.get(id);
+      const hit = byId.get(id);
       const row = Number(ref.replace(/[A-Z]/g, ""));
-      if (row && target) await media(target, row, colIndex(ref));
+      if (row && hit) await media(hit.target, row, colIndex(ref), hit.label);
     }
   }
 

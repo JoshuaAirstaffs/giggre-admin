@@ -208,5 +208,6 @@ export function sheetGig(
     lat: loc?.latitude ?? null,
     lng: loc?.longitude ?? null,
     version: gigVersion(g),
+    images: Array.isArray(g.images) ? g.images.filter((u: unknown): u is string => typeof u === "string") : [],
   };
 }

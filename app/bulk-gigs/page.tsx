@@ -1,15 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { PlusCircle } from "lucide-react";
-// Edit / Delete tabs are turned off for now; uncomment these (and the tabs below) to bring them back.
-// import { Pencil, Trash2 } from "lucide-react";
+import { PlusCircle, Trash2 } from "lucide-react";
+// The Edit tab is turned off for now; uncomment it (and its tab below) to bring it back.
+// import { Pencil } from "lucide-react";
 import AdminLayout from "@/components/layout/AdminLayout";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import BulkGigs from "./BulkGigs";
-// import DeleteHostGigs from "./DeleteHostGigs";
+import DeleteHostGigs from "./DeleteHostGigs";
 // import EditGigs from "./EditGigs";
-// import { BulkStyles } from "./bulkUi";
+import { BulkStyles } from "./bulkUi";
 
 type Tab = "post" | "edit" | "delete";
 
@@ -40,18 +40,16 @@ export default function BulkGigsPage() {
         <button role="tab" aria-selected={tab === "edit"} className={`bgp-tab${tab === "edit" ? " on" : ""}`} onClick={() => setTab("edit")}>
           <Pencil size={15} /> Edit gigs
         </button>
+        */}
         <button role="tab" aria-selected={tab === "delete"} className={`bgp-tab danger${tab === "delete" ? " on" : ""}`} onClick={() => setTab("delete")}>
           <Trash2 size={15} /> Delete gigs
         </button>
-        */}
       </div>
       {/* Tabs stay mounted so switching tabs doesn't lose an upload in progress. */}
       <div hidden={tab !== "post"}><BulkGigs /></div>
-      {/* Turned off for now.
       <BulkStyles />
-      <div hidden={tab !== "edit"}><EditGigs /></div>
+      {/* Turned off for now. <div hidden={tab !== "edit"}><EditGigs /></div> */}
       <div hidden={tab !== "delete"}><DeleteHostGigs /></div>
-      */}
     </AdminLayout>
   );
 }
