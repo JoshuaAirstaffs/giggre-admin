@@ -15,7 +15,7 @@ import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import { GeoPoint, Timestamp } from "firebase-admin/firestore";
 import type { BulkGigRow, BulkGigPreview, ResolvedLocation } from "@/lib/bulkGigs";
 import { findHost } from "@/lib/findHost.server";
-import { EXPERIENCE, hasBlockedTerm, resolveLocation, skillsByName, unverifiedLimitError } from "@/lib/bulkGigs.server";
+import { EXPERIENCE, hasBlockedTerm, resolveLocation, skillsByName, suggestLocations, unverifiedLimitError } from "@/lib/bulkGigs.server";
 
 export const maxDuration = 30;
 
@@ -142,7 +142,11 @@ export async function POST(req: NextRequest) {
     if (errors.length > 0 || !host || typeof location === "string") {
       // The page then offers a Latitude/Longitude form for that row.
       const locationNotFound = typeof location === "string";
-      return NextResponse.json({ ok: false, errors, skillNotFound, locationNotFound });
+      // Address not found on the map: suggest the places Google Maps finds for it.
+      const suggestions = locationNotFound && row.address && !row.lat && !row.lng
+        ? await suggestLocations(row.address, hostCountry)
+        : [];
+      return NextResponse.json({ ok: false, errors, skillNotFound, locationNotFound, suggestions });
     }
 
     const preview: BulkGigPreview = {

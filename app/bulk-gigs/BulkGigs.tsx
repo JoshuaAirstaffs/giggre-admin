@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle, Download, FileSpreadsheet, ImagePlus, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle, Download, FileSpreadsheet, ImagePlus, Loader2, MapPin, Upload } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toaster";
 import { auth } from "@/lib/firebase";
@@ -16,10 +16,13 @@ import { MAX_PICTURES, downloadTemplate, loadSkillNames, pictureNames, readBulkG
 type Status =
   | { state: "checking" }
   | { state: "ready"; preview: BulkGigPreview }
-  | { state: "invalid"; errors: string[]; skillNotFound?: boolean; locationNotFound?: boolean }
+  | { state: "invalid"; errors: string[]; skillNotFound?: boolean; locationNotFound?: boolean; suggestions?: Suggestion[] }
   | { state: "creating"; preview: BulkGigPreview }
   | { state: "created"; preview: BulkGigPreview; gigId: string }
   | { state: "failed"; preview?: BulkGigPreview; errors: string[] };
+
+/** A place Google Maps found for an address the map lookup couldn't. */
+interface Suggestion { address: string; lat: number; lng: number }
 
 interface Item { n: number; row: BulkGigRow; status: Status }
 
@@ -35,7 +38,7 @@ async function callRow(body: object) {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
   });
-  const data = await readApiJson<{ ok?: boolean; errors?: string[]; skillNotFound?: boolean; locationNotFound?: boolean; preview?: BulkGigPreview; gigId?: string }>(res);
+  const data = await readApiJson<{ ok?: boolean; errors?: string[]; skillNotFound?: boolean; locationNotFound?: boolean; suggestions?: Suggestion[]; preview?: BulkGigPreview; gigId?: string }>(res);
   if (!res.ok) return { ok: false, errors: [data.error ?? `Request failed (HTTP ${res.status}).`] };
   return data;
 }
@@ -96,7 +99,7 @@ export default function BulkGigs() {
       const r = await callRow({ row, create: false });
       return r.ok && r.preview
         ? { state: "ready", preview: r.preview }
-        : { state: "invalid", errors: r.errors?.length ? r.errors : ["Check failed."], skillNotFound: r.skillNotFound, locationNotFound: r.locationNotFound };
+        : { state: "invalid", errors: r.errors?.length ? r.errors : ["Check failed."], skillNotFound: r.skillNotFound, locationNotFound: r.locationNotFound, suggestions: r.suggestions };
     } catch (e: any) {
       return { state: "invalid", errors: [e.message ?? "Check failed."] };
     }
@@ -294,6 +297,9 @@ export default function BulkGigs() {
         .bg-ll input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 12.5px; font-family: inherit; }
         .bg-ll input:focus { outline: none; border-color: var(--blue); }
         .bg-ll input.bad { border-color: var(--red); }
+        .bg-sug { display: flex; gap: 6px; align-items: flex-start; text-align: left; padding: 7px 9px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 12px; font-family: inherit; cursor: pointer; transition: border-color .15s; }
+        .bg-sug:hover:not(:disabled) { border-color: var(--blue); }
+        .bg-sug:disabled { opacity: .6; cursor: default; }
         .bg-ll a { font-size: 11.5px; color: var(--blue); }
         .bg-spin { animation: bg-spin .8s linear infinite; }
         @keyframes bg-spin { to { transform: rotate(360deg); } }
@@ -437,7 +443,7 @@ export default function BulkGigs() {
                           </select>
                         )}
                         {status.state === "invalid" && status.locationNotFound && (
-                          <LatLngForm address={row.address} lat={row.lat} lng={row.lng} disabled={!!busy} onSubmit={(lat, lng) => fixLocation(n, lat, lng)} />
+                          <LatLngForm suggestions={status.suggestions ?? []} address={row.address} lat={row.lat} lng={row.lng} disabled={!!busy} onSubmit={(lat, lng) => fixLocation(n, lat, lng)} />
                         )}
                       </td>
                     </tr>
@@ -462,8 +468,8 @@ const validLat = (v: string) => v.trim() !== "" && Number.isFinite(Number(v)) &&
 const validLng = (v: string) => v.trim() !== "" && Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 180;
 
 /** Latitude/Longitude for a row whose address couldn't be found on the map. */
-function LatLngForm({ address, lat: lat0, lng: lng0, disabled, onSubmit }: {
-  address: string; lat: string; lng: string; disabled: boolean; onSubmit: (lat: string, lng: string) => void;
+function LatLngForm({ suggestions, address, lat: lat0, lng: lng0, disabled, onSubmit }: {
+  suggestions: Suggestion[]; address: string; lat: string; lng: string; disabled: boolean; onSubmit: (lat: string, lng: string) => void;
 }) {
   const [lat, setLat] = useState(lat0);
   const [lng, setLng] = useState(lng0);
@@ -485,6 +491,21 @@ function LatLngForm({ address, lat: lat0, lng: lng0, disabled, onSubmit }: {
   const search = address ? `https://www.google.com/maps/search/${encodeURIComponent(address)}` : "https://www.google.com/maps";
   return (
     <form className="bg-ll" onSubmit={submit}>
+      {suggestions.length > 0 && (
+        <>
+          <span className="bg-sub" style={{ marginTop: 0 }}>Google Maps found {suggestions.length === 1 ? "this place" : "these places"}. Check it&apos;s the right one:</span>
+          {suggestions.map((sg, i) => (
+            <button key={i} type="button" className="bg-sug" disabled={disabled} onClick={() => onSubmit(String(sg.lat), String(sg.lng))}>
+              <MapPin size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>
+                {sg.address}
+                <span className="bg-sub" style={{ display: "block" }}>{sg.lat.toFixed(6)}, {sg.lng.toFixed(6)} · Use this</span>
+              </span>
+            </button>
+          ))}
+          <span className="bg-sub" style={{ marginTop: 2 }}>Or type the coordinates:</span>
+        </>
+      )}
       <div className="bg-ll-row">
         <input aria-label="Latitude" placeholder="Latitude" inputMode="decimal" value={lat} disabled={disabled}
           className={tried && !validLat(lat) ? "bad" : ""} onChange={(e) => setLat(e.target.value)} onPaste={onPaste} />

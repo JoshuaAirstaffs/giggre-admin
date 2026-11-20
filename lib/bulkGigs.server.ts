@@ -142,6 +142,49 @@ async function nominatim(path: string, params: Record<string, string>): Promise<
   return res.json();
 }
 
+/** A place Google found for an address the map lookup couldn't. */
+export interface LocationSuggestion {
+  address: string;
+  lat: number;
+  lng: number;
+}
+
+/**
+ * Up to 3 places Google Maps finds for `address` (Places API Text Search),
+ * biased to the host's country. Only used when the normal lookup found
+ * nothing, and only suggested: the admin picks one before the gig is posted.
+ * Returns [] when there's no key or the search fails.
+ */
+export async function suggestLocations(address: string, regionCode?: string | null): Promise<LocationSuggestion[]> {
+  const key = process.env.GOOGLE_MAPS_API_KEY || process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+  if (!key || !address.trim()) return [];
+  try {
+    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": "places.formattedAddress,places.location",
+      },
+      body: JSON.stringify({
+        textQuery: address,
+        pageSize: 3,
+        languageCode: "en",
+        ...(regionCode && /^[A-Za-z]{2}$/.test(regionCode) ? { regionCode: regionCode.toLowerCase() } : {}),
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (Array.isArray(data?.places) ? data.places : [])
+      .map((p: any) => ({ address: String(p?.formattedAddress ?? ""), lat: Number(p?.location?.latitude), lng: Number(p?.location?.longitude) }))
+      .filter((p: LocationSuggestion) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+      .slice(0, 3);
+  } catch {
+    return [];
+  }
+}
+
 /** Resolves the row's location: lat/lng if given, otherwise the address. */
 export async function resolveLocation(row: LocationInput): Promise<ResolvedLocation | string> {
   const hasLat = row.lat !== "", hasLng = row.lng !== "";
