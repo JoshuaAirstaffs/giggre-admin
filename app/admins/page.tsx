@@ -17,6 +17,7 @@ import {
 import type { AdminRecord, CreateAdminInput, UpdateAdminInput } from "@/hooks/useAdmins";
 import type { ModuleKey } from "@/lib/modules";
 import type { AdminRole } from "@/context/AuthContext";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 // ─── Permission Picker ────────────────────────────────────────────────────────
 
@@ -583,7 +584,7 @@ console.log("ENV value starts with:", process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={7} className="admins-empty">Loading admins…</td>
+                <td colSpan={7}><SkeletonRows count={5} avatar={false} /></td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>

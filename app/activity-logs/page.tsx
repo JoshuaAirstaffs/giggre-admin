@@ -26,6 +26,7 @@ import {
   getActionConfig,
   getModuleConfig,
 } from "@/lib/activityLogConfig";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -505,12 +506,7 @@ export default function ActivityLogsPage() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="logs-empty">
-                  <div className="logs-empty-icon">
-                    <RefreshCw size={18} className="spin-slow" />
-                  </div>
-                  Loading activity logs…
-                </td>
+                <td colSpan={5}><SkeletonRows count={5} avatar={false} /></td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>

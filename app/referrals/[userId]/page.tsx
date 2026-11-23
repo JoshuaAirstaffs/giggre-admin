@@ -17,6 +17,7 @@ import {
   type ReferralSettings,
 } from "@/lib/referralRewards";
 import { db } from "@/lib/firebase";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -434,7 +435,7 @@ export default function ReferralTreePage() {
       {error && <div className="rt-empty" style={{ color: "var(--red)" }}>{error}</div>}
 
       {loading ? (
-        <div className="rt-empty">Loading referral tree…</div>
+        <SkeletonRows />
       ) : (
         <>
           <div className="rt-summary">

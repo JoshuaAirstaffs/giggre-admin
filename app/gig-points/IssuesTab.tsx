@@ -8,6 +8,7 @@ import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { toast } from "@/components/ui/Toaster";
 import { retryGigPointsAwards, callableError } from "@/lib/gigPoints";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 interface Issue {
   id: string; code: string; gigType: string | null; detail: string; status: "open" | "resolved";
@@ -53,7 +54,7 @@ export default function IssuesTab() {
     }
   };
 
-  if (loading) return <div className="gp-empty">Loading…</div>;
+  if (loading) return <SkeletonRows />;
   const open = issues.filter((i) => i.status === "open");
 
   return (

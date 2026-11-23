@@ -1,5 +1,6 @@
 'use client'
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react"
 import { getCountFromServer, collection, getDocs, orderBy, query, Timestamp, where, doc, updateDoc, serverTimestamp } from "firebase/firestore"
 import { db } from "@/lib/firebase"
@@ -324,7 +325,7 @@ const TicketsTab = () => {
   }
 
   if (!mounted) return null
-  if (loading) return <p style={{ color: "var(--text-secondary)" }}>Loading tickets...</p>
+  if (loading) return <SkeletonRows />
   if (error)   return <p style={{ color: "var(--red)" }}>{error}</p>
   if (!tickets.length) return <p style={{ color: "var(--text-muted)" }}>No tickets found.</p>
 
@@ -520,7 +521,7 @@ const TicketsTab = () => {
                 }}
               >
                 {timelineLoading ? (
-                  <div className="ticket-timeline-empty">Loading history…</div>
+                  <SkeletonRows count={3} avatar={false} />
                 ) : timeline.length === 0 ? (
                   <div className="ticket-timeline-empty">No history yet.</div>
                 ) : (

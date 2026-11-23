@@ -1,4 +1,5 @@
 'use client'
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useState, useEffect } from 'react'
 import { BellRing, BellOff, Sparkles } from 'lucide-react'
 import './autoReplyStyle.css'
@@ -69,7 +70,7 @@ const AutoReply = () => {
         setMessage(DEFAULT_MESSAGE)
     }
 
-    if (loading) return <p className="auto-reply-loading">Loading settings...</p>
+    if (loading) return <SkeletonRows count={4} avatar={false} />
 
     return (
         <div className="auto-reply">

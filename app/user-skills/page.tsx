@@ -1,5 +1,6 @@
 "use client";
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Plus, Pencil, Trash2, RefreshCw, Search, BookOpen, ClipboardList, Bell, Send, MessageSquare, User, UserSearch, CheckCircle, ChevronLeft, ChevronRight, Copy, XCircle, Clock } from "lucide-react";
 import AdminLayout from "@/components/layout/AdminLayout";
@@ -1053,10 +1054,7 @@ export default function UserSkillsPage() {
           {/* Table */}
           <div className="sl-notif-table-wrap">
             {notifDocsLoading ? (
-              <div className="sl-notif-empty">
-                <RefreshCw size={28} style={{ animation: "sl-shimmer 1s linear infinite", display: "block", margin: "0 auto 8px" }} />
-                Loading…
-              </div>
+              <SkeletonRows />
             ) : filteredNotifDocs.length === 0 ? (
               <div className="sl-notif-empty">
                 <Bell size={32} style={{ display: "block", margin: "0 auto 8px", opacity: 0.4 }} />
@@ -1224,7 +1222,7 @@ export default function UserSkillsPage() {
             {notifUserSearch && (
               <div className="sl-user-list" style={{ maxHeight: 220 }}>
                 {notifUsersLoading ? (
-                  <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>Loading…</div>
+                  <SkeletonRows />
                 ) : filteredNotifUsers.length === 0 ? (
                   <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>No users found</div>
                 ) : (

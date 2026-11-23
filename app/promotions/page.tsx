@@ -17,6 +17,7 @@ import {
   type PerCcy, type PromoAudience, type PromoCode, type PromoInput, type PromoRedemption, type PromoStatus,
   type PromoType, type PromoVoucher,
 } from "@/lib/promos";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 // Promotions — promo codes users redeem in the app / website (Profile →
 // Promo code). Three kinds: Gig Points, Gig Wallet credit, and a cashback
@@ -174,7 +175,7 @@ function PromotionsPage() {
         </div>
 
         {loadError ? <div className="gp-empty" style={{ color: "var(--red)" }}>{loadError}</div>
-          : codes == null ? <div className="gp-empty">Loading promo codes…</div>
+          : codes == null ? <SkeletonRows />
           : list.length === 0 ? (
             <div className="gp-empty">
               {codes.length === 0 ? "No promo codes yet — create your first one." : "No codes match."}
@@ -669,7 +670,7 @@ function RedemptionsModal({ promo, onClose }: { promo: PromoCode; onClose: () =>
   return (
     <Modal open onClose={onClose} size="lg" title={`${promo.code} · ${promo.redemptionCount} redemption${promo.redemptionCount === 1 ? "" : "s"}`}>
       {error ? <div className="gp-empty" style={{ color: "var(--red)" }}>Couldn&apos;t load redemptions ({error}).</div>
-        : rows == null ? <div className="gp-empty">Loading…</div>
+        : rows == null ? <SkeletonRows />
         : rows.length === 0 ? <div className="gp-empty">Nobody has redeemed this code yet.</div>
         : (
           <div className="gp-table-wrap" style={{ maxHeight: 460, overflowY: "auto" }}>

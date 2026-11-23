@@ -12,6 +12,7 @@ import {
   GIG_POINTS_LIMITS_DOC, REQUEST_TYPES, REQUEST_TYPE_LABEL, DIRECTION_KEY, parseConversion, fmtMoney,
   type ConversionConfig, type RequestType, type TypeLimits,
 } from "@/lib/gigPoints";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 const HINTS: Record<RequestType, string> = {
   to_cash: "User turns points into GigCash in their Gig Wallet. The points are held until you decide.",
@@ -122,7 +123,7 @@ export default function LimitsTab({ user, canEdit }: { user: AdminUser; canEdit:
     }
   };
 
-  if (loading) return <div className="gp-empty">Loading conversion settings…</div>;
+  if (loading) return <SkeletonRows count={4} avatar={false} />;
 
   return (
     <>

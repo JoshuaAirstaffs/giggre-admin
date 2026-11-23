@@ -8,6 +8,7 @@ import { toast } from "@/components/ui/Toaster";
 import type { AdminUser } from "@/context/AuthContext";
 import { writeLog } from "@/lib/activitylog";
 import { GIG_POINTS_CONFIG_DOC, GIG_TYPES, parseRewardConfig, type GigTypeKey, type RewardConfig } from "@/lib/gigPoints";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 type Draft = { enabled: boolean; byType: Record<GigTypeKey, string>; cap: string };
 const toDraft = (c: RewardConfig): Draft => ({
@@ -75,7 +76,7 @@ export default function RewardsTab({ user, canEdit }: { user: AdminUser; canEdit
     }
   };
 
-  if (loading) return <div className="gp-empty">Loading reward settings…</div>;
+  if (loading) return <SkeletonRows count={4} avatar={false} />;
   const disabled = !canEdit || saving;
 
   return (

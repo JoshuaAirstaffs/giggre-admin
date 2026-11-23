@@ -1,4 +1,5 @@
 'use client'
+import { SkeletonBubbles, SkeletonRows } from "@/components/ui/Skeleton";
 import {
   collection, query, orderBy, addDoc,
   serverTimestamp, onSnapshot, doc,
@@ -497,7 +498,7 @@ const Messages = () => {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
-  if (loadingRooms) return <p className="messages-loading">Loading chats...</p>
+  if (loadingRooms) return <SkeletonRows />
 
   return (
     <div className="messages-container">
@@ -527,7 +528,7 @@ const Messages = () => {
             </div>
           ))}
           {loadingMoreRooms && (
-            <p className="messages-loading-more">Loading more chats...</p>
+            <SkeletonRows count={1} />
           )}
           {!hasMoreRooms && rooms.length > 0 && (
             <p className="messages-end-label">No more chats</p>
@@ -557,7 +558,7 @@ const Messages = () => {
               )}
 
               {loadingMessages ? (
-                <p className="messages-empty">Loading messages...</p>
+                <SkeletonBubbles />
               ) : messages.length === 0 ? (
                 <p className="messages-empty">No messages yet.</p>
               ) : (

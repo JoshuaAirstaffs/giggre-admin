@@ -1,5 +1,6 @@
 "use client";
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { Suspense } from "react";
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment, memo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -1928,9 +1929,7 @@ function UsersPageInner() {
               </div>
 
               {deleteRequestsLoading ? (
-                <div style={{ padding: "40px 24px", textAlign: "center", fontSize: 13, color: "var(--text-muted)" }}>
-                  Loading deletion requests…
-                </div>
+                <SkeletonRows />
               ) : deleteRequests.length === 0 ? (
                 <div style={{ padding: "52px 24px", textAlign: "center", fontSize: 13, color: "var(--text-muted)" }}>
                   No deletion requests found.
@@ -2064,7 +2063,7 @@ function UsersPageInner() {
                                       {gigsLoading ? (
                                         <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Checking for active gigs…</div>
                                       ) : !gigsLoaded ? (
-                                        <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Loading…</div>
+                                        <SkeletonRows />
                                       ) : totalActiveGigs === 0 ? (
                                         <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--green)", fontWeight: 600 }}>
                                           <CheckCircle size={14} /> No active gigs. Safe to delete.
@@ -2283,7 +2282,7 @@ function UsersPageInner() {
             .ug-empty { padding: 32px 0; text-align: center; color: var(--text-muted); font-size: 13px; }
           `}</style>
           {gigsLoadingId === gigsModalUser.id ? (
-            <div className="ug-empty">Loading gigs…</div>
+            <SkeletonRows />
           ) : !userGigsMap[gigsModalUser.id] || userGigsMap[gigsModalUser.id].length === 0 ? (
             <div className="ug-empty">No gigs posted by this user.</div>
           ) : (
@@ -2346,7 +2345,7 @@ function UsersPageInner() {
             .ug-empty { padding: 32px 0; text-align: center; color: var(--text-muted); font-size: 13px; }
           `}</style>
           {workedGigsLoadingId === workedGigsModalUser.id ? (
-            <div className="ug-empty">Loading gigs…</div>
+            <SkeletonRows />
           ) : !workedGigsMap[workedGigsModalUser.id] || workedGigsMap[workedGigsModalUser.id].length === 0 ? (
             <div className="ug-empty">No gigs worked by this user.</div>
           ) : (

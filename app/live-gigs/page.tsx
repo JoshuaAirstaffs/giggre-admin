@@ -46,6 +46,7 @@ import {
   assignGigTaskType, backfillGigCodes, explainGsku, watchGsinCatalog,
   type GigCollection, type GsinCategory, type GsinSubcategory, type GsinTaskType,
 } from "@/lib/gsin";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -3003,7 +3004,7 @@ function AssignCodesModal({ gig, onClose, onAssigned }: {
         />
         <div style={{ maxHeight: 300, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
           {loadError ? <div style={{ padding: 12, fontSize: 12, color: "var(--red)" }}>{loadError}</div>
-            : tasks == null ? <div style={{ padding: 12, fontSize: 12, color: "var(--text-muted)" }}>Loading…</div>
+            : tasks == null ? <SkeletonRows />
             : list.length === 0 ? (
               <div style={{ padding: 12, fontSize: 12, color: "var(--text-muted)" }}>
                 {tasks.length === 0 ? <>No task types yet — add them in <a href="/library-gsin" style={{ color: "var(--blue)" }}>GSIN Library</a>.</> : "No match."}

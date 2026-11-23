@@ -1,5 +1,6 @@
 'use client'
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useEffect, useState, useMemo } from "react"
 import { getCountFromServer, collection, getDocs, orderBy, query, Timestamp, where, doc, updateDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
@@ -163,7 +164,7 @@ const pagedTickets = tickets.slice(
   }
 
   if (!mounted) return null
-  if (loading) return <p style={{ color: "var(--text-secondary)" }}>Loading tickets...</p>
+  if (loading) return <SkeletonRows />
   if (error)   return <p style={{ color: "var(--red)" }}>{error}</p>
   if (!tickets.length) return <p style={{ color: "var(--text-muted)" }}>No tickets found.</p>
 

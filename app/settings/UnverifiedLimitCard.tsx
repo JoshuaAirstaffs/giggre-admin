@@ -1,5 +1,6 @@
 "use client";
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useEffect, useState } from "react";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -170,7 +171,7 @@ export default function UnverifiedLimitCard({ user, canEdit }: { user: AdminUser
       </div>
       <div style={{ padding: 18 }}>
         {!saved ? (
-          <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Loading…</div>
+          <SkeletonRows />
         ) : (
           <>
             <div style={row}>

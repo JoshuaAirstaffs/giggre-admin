@@ -31,11 +31,12 @@ import {
   buildBestRanking, BEST_MIN_COMPLETED, BEST_MIN_RATINGS, BEST_WEIGHTS,
   type GigOutcome, type BestUser, type BestEntry, type Ineligibility,
 } from "./leaderboard";
+import { SkeletonBlock, SkeletonRows } from "@/components/ui/Skeleton";
 
 // Leaflet requires browser APIs — no SSR
 const GigHeatmap = dynamic(() => import("./GigHeatmap"), {
   ssr: false,
-  loading: () => <div className="an-empty">Loading map…</div>,
+  loading: () => <SkeletonBlock height={320} />,
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -844,7 +845,7 @@ export default function AnalyticsPage() {
             <div className="an-panel-title">Sign-ups &amp; total users</div>
             <div className="an-panel-sub">New sign-ups per period (bars) and running total (line)</div>
             <div className="an-chart">
-              {loading ? <div className="an-empty">Loading…</div> : (
+              {loading ? <SkeletonRows /> : (
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={userStats.growth} margin={{ top: 4, right: 4, left: -16, bottom: 0 }}>
                     <CartesianGrid stroke="var(--border)" vertical={false} />
@@ -884,7 +885,7 @@ export default function AnalyticsPage() {
               ))}
             </div>
             <div className="an-chart" style={{ height: 150 }}>
-              {loading ? <div className="an-empty">Loading…</div> : (
+              {loading ? <SkeletonRows /> : (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={userStats.verifByBucket} margin={{ top: 4, right: 4, left: -16, bottom: 0 }}>
                     <CartesianGrid stroke="var(--border)" vertical={false} />
@@ -982,7 +983,7 @@ export default function AnalyticsPage() {
                   </span>
                 )}
               </div>
-              {loading ? <div className="an-empty">Loading…</div> : data.rows.length === 0 ? (
+              {loading ? <SkeletonRows /> : data.rows.length === 0 ? (
                 <div className="an-empty">
                   {data.candidateCount === 0 ? "No completed gigs this month" : "No one qualifies yet — tick “Show not eligible” to see who's close"}
                 </div>
@@ -1080,7 +1081,7 @@ export default function AnalyticsPage() {
                 <div className="an-panel-title">{title}</div>
                 <span className="an-count">Top {LEADERBOARD_SIZE}</span>
               </div>
-              {loading ? <div className="an-empty">Loading…</div> : rows.length === 0 ? (
+              {loading ? <SkeletonRows /> : rows.length === 0 ? (
                 <div className="an-empty">No one with completed gigs and a {LEADERBOARD_MIN_RATE}%+ rate in this period</div>
               ) : (
                 <table className="an-table">
@@ -1150,7 +1151,7 @@ export default function AnalyticsPage() {
         </div>
 
         <div className="an-panel">
-          {loading ? <div className="an-empty">Loading…</div> : watchStats.rows.length === 0 ? (
+          {loading ? <SkeletonRows /> : watchStats.rows.length === 0 ? (
             <div className="an-empty">No one flagged in this period</div>
           ) : (
             <table className="an-table an-watch">
@@ -1282,7 +1283,7 @@ export default function AnalyticsPage() {
           </div>
           <div className="an-map">
             {/* Keep the map mounted across filter changes and refreshes so it holds its pan/zoom */}
-            {loading && gigs.length === 0 ? <div className="an-empty">Loading…</div> : (
+            {loading && gigs.length === 0 ? <SkeletonRows /> : (
               <>
                 <GigHeatmap points={mapStats.points} theme={theme === "light" ? "light" : "dark"} showLabels={mapLabels} />
                 {mapStats.points.length === 0 && (

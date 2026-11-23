@@ -1,5 +1,6 @@
 'use client'
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import React, { useEffect, useState, useMemo, useRef } from "react"
 import {
   collection, getDocs, onSnapshot, orderBy, query, doc, updateDoc, setDoc,
@@ -612,7 +613,7 @@ const UserRequests = ({ onRequestDecision }: UserRequestsProps) => {
 
   // ── Render ───────────────────────────────────────────────────────────────
 
-  if (loading) return <p style={{ color: "var(--text-secondary)" }}>Loading requests...</p>
+  if (loading) return <SkeletonRows />
   if (error)   return <p style={{ color: "var(--red)" }}>{error}</p>
 
   return (
@@ -1001,7 +1002,7 @@ const UserRequests = ({ onRequestDecision }: UserRequestsProps) => {
             <span className="ticket-modal-label">History</span>
 
             {timelineLoading ? (
-              <div className="ur-timeline-loading">Loading history…</div>
+              <SkeletonRows count={3} avatar={false} />
             ) : (
               <div className="ur-timeline">
                 {timeline.map((entry, i) => {

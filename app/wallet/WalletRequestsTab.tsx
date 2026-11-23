@@ -1,5 +1,6 @@
 "use client";
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useEffect, useMemo, useState } from "react";
 import { collection, doc, getDoc, limit, onSnapshot, orderBy, query, where } from "firebase/firestore";
 import { ArrowRight, Check, ExternalLink, Inbox, X } from "lucide-react";
@@ -73,7 +74,7 @@ export default function WalletRequestsTab() {
       </div>
 
       <div className="gp-table-wrap">
-        {loading ? <div className="gp-empty">Loading requests…</div>
+        {loading ? <SkeletonRows />
           : error ? <div className="gp-empty" style={{ color: "var(--red)" }}>{error}</div>
           : visible.length === 0 ? (
             <div className="gp-empty">

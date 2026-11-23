@@ -1,5 +1,6 @@
 "use client";
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useEffect, useMemo, useState } from "react";
 import { getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { AlertCircle, Lock, Plus, Save, Trash2 } from "lucide-react";
@@ -119,7 +120,7 @@ export default function WalletSettingsTab({ user, canEdit }: { user: AdminUser; 
     }
   };
 
-  if (loading) return <div className="gp-empty">Loading wallet settings…</div>;
+  if (loading) return <SkeletonRows count={4} avatar={false} />;
 
   return (
     <>

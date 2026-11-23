@@ -1,5 +1,6 @@
 "use client";
 
+import { Skeleton } from "@/components/ui/Skeleton";
 import { useFx, phpHint } from "@/lib/fx";
 import { fmtMoney } from "@/lib/gigPoints";
 import { RESET_LABEL, useUnverifiedLimit } from "@/lib/unverifiedLimit";
@@ -19,7 +20,7 @@ export default function EarningLimitField({ uid, isVerified }: { uid: string; is
     </div>
   );
 
-  if (u.loading) return wrap(<span className="exp-value" style={{ color: "var(--text-muted)" }}>Loading…</span>);
+  if (u.loading) return wrap(<Skeleton inline width={80} height={12} />);
   if (isVerified === "verified") return wrap(<span className="exp-value" style={{ color: "var(--green)" }}>Verified — no limit</span>);
   const max = u.config?.enabled ? u.config.maxUsd : null;
   if (!max) return wrap(<span className="exp-value" style={{ color: "var(--text-muted)" }}>Off — no limit set</span>);

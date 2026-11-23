@@ -1,5 +1,6 @@
 "use client";
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useState, useEffect, useCallback } from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
@@ -313,9 +314,7 @@ export default function SettingsPage() {
       `}</style>
 
       {loading ? (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: "var(--text-muted)", fontSize: 13 }}>
-          Loading settings…
-        </div>
+        <SkeletonRows count={4} avatar={false} />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 

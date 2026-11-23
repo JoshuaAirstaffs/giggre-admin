@@ -1,5 +1,6 @@
 "use client";
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useState, useEffect, useMemo, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
@@ -7,7 +8,7 @@ import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { collection, onSnapshot, query, orderBy, Timestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import {
-  Search, RefreshCw, Flag, ChevronLeft, ChevronRight, ChevronDown, ChevronUp,
+  Search, Flag, ChevronLeft, ChevronRight, ChevronDown, ChevronUp,
   AlertTriangle, UserX, ExternalLink,
 } from "lucide-react";
 
@@ -354,10 +355,7 @@ function ReportsPageInner() {
 
         <div className="rp-table-wrap">
           {blockedLoading ? (
-            <div className="rp-empty">
-              <RefreshCw size={32} style={{ animation: "spin 1s linear infinite", display: "block", margin: "0 auto 8px" }} />
-              Loading…
-            </div>
+            <SkeletonRows />
           ) : blockedError ? (
             <div className="rp-empty">
               <AlertTriangle size={36} style={{ display: "block", margin: "0 auto 8px", color: "var(--red)" }} />
@@ -495,10 +493,7 @@ function ReportsPageInner() {
 
         <div className="rp-table-wrap">
           {loading ? (
-            <div className="rp-empty">
-              <RefreshCw size={32} style={{ animation: "spin 1s linear infinite", display: "block", margin: "0 auto 8px" }} />
-              Loading…
-            </div>
+            <SkeletonRows />
           ) : error ? (
             <div className="rp-empty">
               <AlertTriangle size={36} style={{ display: "block", margin: "0 auto 8px", color: "var(--red)" }} />

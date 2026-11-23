@@ -1,5 +1,6 @@
 "use client";
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown, ArrowUp, Edit2, Eye, EyeOff, Film, Plus, PlayCircle, Trash2, Youtube, AlertCircle,
@@ -157,7 +158,7 @@ export function TutorialVideosPanel({ actor }: { actor: ActorInfo }) {
       {error ? (
         <div className="tv-empty" style={{ color: "var(--red)" }}><AlertCircle size={16} /> {error}</div>
       ) : videos == null ? (
-        <div className="tv-empty">Loading videos…</div>
+        <SkeletonRows />
       ) : shown.length === 0 ? (
         <div className="tv-empty">
           <Film size={22} style={{ opacity: 0.6 }} /><br />

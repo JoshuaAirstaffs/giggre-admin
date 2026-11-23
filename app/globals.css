@@ -101,3 +101,26 @@ input, textarea {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+/* ── Skeleton loading (components/ui/Skeleton.tsx) ──────────────────────
+   Grey placeholder shapes with a soft shimmer, used instead of spinners and
+   "Loading…" text wherever a page, table or panel is loading. */
+@keyframes sk-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+.sk {
+  display: block;
+  background-color: var(--border);
+  background-image: linear-gradient(90deg, transparent 0%, color-mix(in oklab, var(--bg-elevated) 70%, transparent) 50%, transparent 100%);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: sk-shimmer 1.3s linear infinite;
+}
+.sk-inline { display: inline-block; vertical-align: middle; }
+.sk-rows { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+.sk-row { display: flex; align-items: center; gap: 12px; }
+.sk-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.sk-bubbles { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+@media (prefers-reduced-motion: reduce) {
+  .sk { animation: none; background-image: none; }
+}

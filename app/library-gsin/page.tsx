@@ -19,6 +19,7 @@ import {
   clearLegacySkillLinks, renameCategory, renameSubcategory, setSubcategoryIcon, updateTaskType, watchGsinCatalog,
   type GsinCategory, type GsinSubcategory, type GsinTaskType,
 } from "@/lib/gsin";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 // GSIN Library — Category → Sub-category → Task type, each with its prefix.
 // Creating a task type gives it the category's next GSINS (G + CAT + 6 digits);
@@ -149,7 +150,7 @@ export default function GsinLibraryPage() {
       </div>
 
       {loadError ? <div className="gp-empty" style={{ color: "var(--red)" }}>{loadError}</div>
-        : cats == null ? <div className="gp-empty">Loading library…</div> : (
+        : cats == null ? <SkeletonRows /> : (
           <div className="gl-grid">
             {/* Categories */}
             <div className="gp-card">

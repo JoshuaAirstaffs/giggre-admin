@@ -1,5 +1,6 @@
 "use client";
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import JSZip from "jszip";
@@ -30,7 +31,7 @@ import { ref, getBlob, getMetadata } from "firebase/storage";
 import { writeLog } from "@/lib/activitylog";
 import { toast } from "@/components/ui/Toaster";
 import {
-  Search, RefreshCw, BadgeCheck, XCircle, Clock, X,
+  Search, BadgeCheck, XCircle, Clock, X,
   User, Phone, Mail, Hash, Image as ImageIcon, AlertTriangle,
   CheckCircle, Plus, UserSearch, Send, FileText,
   ChevronLeft, ChevronRight, Bell, MessageSquare, Copy,
@@ -1936,10 +1937,7 @@ function VerificationPageInner() {
           {/* Table */}
           <div className="vr-table-wrap">
             {notifDocsLoading ? (
-              <div className="vr-empty">
-                <RefreshCw size={32} style={{ animation: "spin 1s linear infinite", display: "block", margin: "0 auto 8px" }} />
-                Loading…
-              </div>
+              <SkeletonRows />
             ) : filteredNotifDocs.length === 0 ? (
               <div className="vr-empty">
                 <Bell size={36} style={{ display: "block", margin: "0 auto 8px" }} />
@@ -2166,10 +2164,7 @@ function VerificationPageInner() {
       {/* ── Table ─────────────────────────────────────────────────────────── */}
       <div className="vr-table-wrap">
         {loading ? (
-          <div className="vr-empty">
-            <RefreshCw size={32} style={{ animation: "spin 1s linear infinite", display: "block", margin: "0 auto 8px" }} />
-            Loading…
-          </div>
+          <SkeletonRows />
         ) : filtered.length === 0 ? (
           <div className="vr-empty">
             <BadgeCheck size={36} style={{ display: "block", margin: "0 auto 8px" }} />
@@ -2351,10 +2346,7 @@ function VerificationPageInner() {
           </div>
           <div className="vr-user-list">
             {usersLoading ? (
-              <div style={{ padding: "24px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
-                <RefreshCw size={18} style={{ animation: "spin 1s linear infinite", display: "block", margin: "0 auto 8px" }} />
-                Loading users…
-              </div>
+              <SkeletonRows />
             ) : filteredUsers.length === 0 ? (
               <div style={{ padding: "24px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>No users found</div>
             ) : (
@@ -2622,7 +2614,7 @@ function VerificationPageInner() {
               }}
             >
               {timelineLoading ? (
-                <div className="vr-timeline-loading">Loading history…</div>
+                <SkeletonRows count={3} avatar={false} />
               ) : timeline.length === 0 ? (
                 <div className="vr-timeline-empty">No history yet.</div>
               ) : (
@@ -2833,10 +2825,7 @@ function VerificationPageInner() {
             {notifUserSearch && (
               <div className="vr-user-list" style={{ maxHeight: 220 }}>
                 {usersLoading ? (
-                  <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
-                    <RefreshCw size={16} style={{ animation: "spin 1s linear infinite", display: "block", margin: "0 auto 8px" }} />
-                    Loading…
-                  </div>
+                  <SkeletonRows />
                 ) : filteredNotifUsers.length === 0 ? (
                   <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>No users found</div>
                 ) : (

@@ -13,6 +13,7 @@ import {
   REQUEST_TYPES, REQUEST_TYPE_LABEL, parseRequest, decideGigPointsRequest, callableError, fmtMoney, currencySymbol,
   type PointsRequest, type RequestStatus, type RequestType,
 } from "@/lib/gigPoints";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 const STATUS_FILTERS: { key: RequestStatus | "all"; label: string }[] = [
   { key: "pending", label: "Pending" },
@@ -84,7 +85,7 @@ export default function RequestsTab({ user }: { user: AdminUser }) {
       </div>
 
       <div className="gp-table-wrap">
-        {loading ? <div className="gp-empty">Loading requests…</div>
+        {loading ? <SkeletonRows />
           : error ? <div className="gp-empty" style={{ color: "var(--red)" }}>{error}</div>
           : visible.length === 0 ? (
             <div className="gp-empty">

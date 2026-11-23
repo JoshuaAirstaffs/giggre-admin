@@ -1,5 +1,6 @@
 "use client";
 
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
@@ -1438,7 +1439,7 @@ export default function UserProfilePage() {
   if (loading) {
     return (
       <AdminLayout title="User Profile">
-        <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>Loading…</div>
+        <SkeletonRows />
       </AdminLayout>
     );
   }
@@ -1853,7 +1854,7 @@ export default function UserProfilePage() {
             ) : activeSkillTab === "requests" ? (
               /* User Requests tab */
               userRequestsLoading ? (
-                <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Loading requests…</div>
+                <SkeletonRows />
               ) : userSkillRequests.length === 0 ? (
                 <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>No skill requests found.</div>
               ) : (
@@ -1995,7 +1996,7 @@ export default function UserProfilePage() {
             const safeRefPage = Math.min(referredUsersPage, totalRefPages);
             const pagedRef = referredUsers.slice((safeRefPage - 1) * REF_PAGE_SIZE, safeRefPage * REF_PAGE_SIZE);
             return referredUsersLoading ? (
-              <div style={{ padding: "20px 24px", fontSize: 13, color: "var(--text-muted)" }}>Loading…</div>
+              <SkeletonRows />
             ) : referredUsers.length === 0 ? (
               <div style={{ padding: "20px 24px", fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>No referred users found.</div>
             ) : (
@@ -2120,7 +2121,7 @@ export default function UserProfilePage() {
               const isLoading = blockedTab === "blocked" ? blockedUsersLoading : blockedByLoading;
               const emptyMsg = blockedTab === "blocked" ? "This user hasn't blocked anyone." : "No one has blocked this user.";
               return isLoading ? (
-                <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Loading…</div>
+                <SkeletonRows />
               ) : list.length === 0 ? (
                 <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>{emptyMsg}</div>
               ) : (
@@ -2182,7 +2183,7 @@ export default function UserProfilePage() {
                 )}
               </div>
               {postedGigsLoading ? (
-                <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>Loading gigs…</div>
+                <SkeletonRows />
               ) : postedGigs.length === 0 ? (
                 <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>No gigs posted yet.</div>
               ) : (
@@ -2325,7 +2326,7 @@ export default function UserProfilePage() {
                 )}
               </div>
               {workedGigsLoading ? (
-                <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>Loading gigs…</div>
+                <SkeletonRows />
               ) : workedGigs.length === 0 ? (
                 <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>No gigs worked yet.</div>
               ) : (
@@ -2443,7 +2444,7 @@ export default function UserProfilePage() {
             </span>
           </div>
           {historyLoading ? (
-            <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>Loading history…</div>
+            <SkeletonRows count={3} avatar={false} />
           ) : suspensionHistory.length === 0 ? (
             <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic", padding: "8px 0" }}>No moderation history found.</div>
           ) : (

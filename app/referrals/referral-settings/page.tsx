@@ -18,6 +18,7 @@ import {
   describeSettingsChanges, describeSettings,
   type LevelReward, type ReferralRewards, type ReferralSettings,
 } from "@/lib/referralRewards";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 const LEVEL_HINTS = [
   "People who signed up with the user's own referral code",
@@ -237,7 +238,7 @@ export default function ReferralSettingsPage() {
       `}</style>
 
       {loading ? (
-        <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>Loading referral settings…</div>
+        <SkeletonRows count={4} avatar={false} />
       ) : (
         <>
           <div className="rs-grid">

@@ -23,6 +23,7 @@ import {
   GitBranch, Users, ChevronDown, ChevronUp, ExternalLink, X, BadgeCheck,
   Wrench,
 } from "lucide-react";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -265,7 +266,7 @@ function ReferredPanel({
       </div>
 
       {loading ? (
-        <div style={{ padding: "14px 18px", fontSize: 12, color: "var(--text-muted)" }}>Loading…</div>
+        <SkeletonRows />
       ) : visibleUsers.length === 0 ? (
         <div style={{ padding: "14px 18px", fontSize: 12, color: "var(--text-muted)" }}>
           {referredUsers.length === 0 ? "No referred users found." : `No ${verifyFilter} users.`}
