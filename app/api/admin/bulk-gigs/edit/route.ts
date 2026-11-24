@@ -17,11 +17,13 @@ import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import { findHost } from "@/lib/findHost.server";
 import { EXPERIENCE, gigVersion, hasBlockedTerm, resolveLocation, sheetGig, unverifiedLimitError } from "@/lib/bulkGigs.server";
 import type { ResolvedLocation } from "@/lib/bulkGigs";
-import type { EditableGig, EditChange, EditCheck, EditRow } from "@/lib/bulkEdit";
+import type { EditableGig, EditChange, EditCheck, EditRow, PhotoSlot } from "@/lib/bulkEdit";
 
 export const maxDuration = 60;
 
 const MAX_HOSTS = 20;
+/** The app's photo limit per gig. */
+const MAX_PICTURES = 5;
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
 async function authorize(req: NextRequest) {
@@ -61,11 +63,11 @@ interface Evaluated {
 }
 
 /** Works out the update for one row and everything that's wrong with it. */
-async function evaluate(row: EditRow, g: DocumentData, gigId: string, hasWorkers: boolean, tz: string | undefined, given?: ResolvedLocation | null): Promise<Evaluated> {
+async function evaluate(row: EditRow, g: DocumentData, gigId: string, hasWorkers: boolean, tz: string | undefined, given?: ResolvedLocation | null, saving = false): Promise<Evaluated> {
   const errors: string[] = [];
   const changes: EditChange[] = [];
   const update: Record<string, unknown> = {};
-  const check: EditCheck = { gigId, title: String(g.title ?? ""), hostName: String(g.hostName ?? ""), errors, changes };
+  const check: EditCheck = { gigId, title: String(g.title ?? ""), hostName: String(g.hostName ?? ""), errors, changes, hostId: String(g.hostId ?? "") };
 
   const blocked = notEditable(g, hasWorkers);
   if (blocked) { errors.push(blocked); return { check, update }; }
@@ -177,6 +179,43 @@ async function evaluate(row: EditRow, g: DocumentData, gigId: string, hasWorkers
     }
   }
 
+  // Photos (only when the file has Picture columns).
+  if (row.photoError) errors.push(row.photoError);
+  if (row.photos) {
+    const current: string[] = Array.isArray(g.images) ? g.images.filter((u: unknown): u is string => typeof u === "string") : [];
+    const slots = row.photos;
+    const unchanged = slots.length === current.length && slots.every((sl, i) => "keep" in sl && sl.keep === i + 1);
+    if (!unchanged) {
+      if (slots.length > MAX_PICTURES) errors.push(`At most ${MAX_PICTURES} photos per gig (this row has ${slots.length}).`);
+      const kept = new Set<number>();
+      for (const sl of slots) {
+        if ("keep" in sl) {
+          if (sl.keep < 1 || sl.keep > current.length) errors.push(`"Current photo ${sl.keep}" doesn't exist on this gig any more. Download a fresh copy.`);
+          else if (kept.has(sl.keep)) errors.push(`"Current photo ${sl.keep}" is listed twice.`);
+          kept.add(sl.keep);
+        }
+      }
+      const added = slots.filter((sl) => !("keep" in sl)).length;
+      const removed = current.length - kept.size;
+      const plural = (n: number) => `${n} photo${n === 1 ? "" : "s"}`;
+      const detail = [added && `${added} new`, removed > 0 && `${removed} removed`].filter(Boolean).join(", ");
+      changes.push({ label: "Photos", from: current.length ? plural(current.length) : "No photos", to: `${slots.length ? plural(slots.length) : "No photos"}${detail ? ` (${detail})` : " (reordered)"}` });
+
+      if (saving) {
+        // New photos were stored by /api/admin/bulk-gigs/photo in this host's folder.
+        const bucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET ?? "";
+        const prefix = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodeURIComponent(`gig_images/${g.hostId}/`)}`;
+        const images: string[] = [];
+        for (const sl of slots) {
+          if ("keep" in sl) { if (current[sl.keep - 1]) images.push(current[sl.keep - 1]); }
+          else if ("url" in sl && sl.url.startsWith(prefix)) images.push(sl.url);
+          else errors.push("A new photo wasn't uploaded. Try saving again.");
+        }
+        update.images = images.length ? images : FieldValue.delete();
+      }
+    }
+  }
+
   if (amountChanged || payChanged || update.currencyCode) {
     update.budget = amount;
     update.ratePerSlot = amount;
@@ -217,6 +256,17 @@ function cleanRow(raw: unknown): EditRow | null {
     skill: s("skill"), workers: s("workers"), experience: s("experience"), payType: s("payType"), amount: s("amount"), hours: s("hours"),
     scheduledAt: s("scheduledAt"), scheduleText: s("scheduleText"), address: s("address"), lat: s("lat"), lng: s("lng"),
   };
+  if (Array.isArray(r.photos)) {
+    const slots: PhotoSlot[] = [];
+    for (const x of (r.photos as unknown[]).slice(0, 20)) {
+      const o = (x ?? {}) as Record<string, unknown>;
+      if (Number.isInteger(o.keep)) slots.push({ keep: o.keep as number });
+      else if (Number.isInteger(o.newIdx)) slots.push({ newIdx: o.newIdx as number });
+      else if (typeof o.url === "string") slots.push({ url: o.url });
+    }
+    row.photos = slots;
+  }
+  if (typeof r.photoError === "string" && r.photoError) row.photoError = r.photoError.slice(0, 300);
   return ID_RE.test(row.gigId) ? row : null;
 }
 
@@ -269,12 +319,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true, check });
       }
       const given = action === "save" ? (body?.resolved as ResolvedLocation | null | undefined) : undefined;
-      const { check, update } = await evaluate(row, snap.data()!, row.gigId, hasWorkers, tz, given);
+      const { check, update } = await evaluate(row, snap.data()!, row.gigId, hasWorkers, tz, given, action === "save");
       if (action === "check" || check.errors.length > 0 || check.changes.length === 0) {
         return NextResponse.json({ ok: true, check });
       }
 
       // Save: re-check inside a transaction so an application landing now isn't overwritten.
+      // editedAt is set here (not serverTimestamp) so the new Version can be returned.
+      const editedAt = Timestamp.now();
       try {
         await adminDb.runTransaction(async (tx) => {
           const cur = await tx.get(ref);
@@ -286,11 +338,12 @@ export async function POST(req: NextRequest) {
           if (versionOf(g) !== row.version) throw new Error("This gig was changed a moment ago. Download a fresh copy and edit that.");
           tx.update(ref, {
             ...update,
-            editedAt: FieldValue.serverTimestamp(),
+            editedAt,
             bulkEdit: { adminId: auth.uid, adminName: auth.name, at: FieldValue.serverTimestamp() },
           });
         });
         check.saved = true;
+        check.version = String(editedAt.toMillis());
       } catch (e: any) {
         check.errors.push(e?.message ?? "Save failed.");
       }
