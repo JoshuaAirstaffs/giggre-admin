@@ -1,5 +1,7 @@
 // One workbook format for Bulk Open Gigs: Post, Edit and Delete all use the
-// same columns (Delete adds an Action column). Laid out like a marketplace
+// same columns (Delete adds an Action column). The "all" file does all three
+// from one sheet: blank Gig ID = post, changed cells = edit, Action delete =
+// delete; it also has a Notes column that's never uploaded. Laid out like a marketplace
 // item template:
 //
 //   Instructions sheet  title, colour legend of the sections, steps, and a
@@ -14,12 +16,12 @@
 
 import { colName, downloadWorkbook, type BandColor, type SCell, type StyledSheet } from "@/lib/xlsxStyled";
 
-export type SheetKind = "post" | "edit" | "delete";
+export type SheetKind = "post" | "edit" | "delete" | "all";
 type Cell = string | number | null;
 
 export type GigCol =
   | "gigId" | "version" | "host" | "title" | "description" | "skill" | "experience" | "payType" | "amount" | "workers"
-  | "date" | "time" | "hours" | "address" | "lat" | "lng" | "pictures" | "pic2" | "pic3" | "pic4" | "pic5" | "action";
+  | "date" | "time" | "hours" | "address" | "lat" | "lng" | "pictures" | "pic2" | "pic3" | "pic4" | "pic5" | "photoKeys" | "action" | "notes";
 
 /** The five photo columns, Picture 1 … Picture 5 (one photo per cell). */
 export const PICTURE_COLS: GigCol[] = ["pictures", "pic2", "pic3", "pic4", "pic5"];
@@ -47,6 +49,8 @@ export interface SheetGig {
   version: string;
   /** Current photo URLs (gig `images`), shown as "Current photo N" links. */
   images?: string[];
+  /** Fingerprints of the photos embedded in the sheet, in `images` order ("a1b2…,c3d4…"). */
+  photoKeys?: string;
 }
 
 /** Text of a cell that keeps the gig's existing photo N (Edit files). */
@@ -62,6 +66,9 @@ export interface SheetPhoto { data: Uint8Array; width: number; height: number }
 /** Shown size of a photo inside a Picture cell (px) and the row height that fits it (pt). */
 const PHOTO_BOX = 72;
 const PHOTO_ROW_PT = 62;
+/** One line of wrapped text (pt), and the tallest a row grows for text (~10 lines). */
+const LINE_PT = 15;
+const MAX_TEXT_ROW_PT = 153;
 
 type Need = "Required" | "Optional" | "Don't change" | "Can't change" | "Not used";
 
@@ -72,7 +79,7 @@ interface Section {
   cols: GigCol[];
   need: string;
   desc: string;
-  onlyFor?: SheetKind;
+  onlyFor?: SheetKind[];
 }
 
 const SECTIONS: Section[] = [
@@ -98,8 +105,16 @@ const SECTIONS: Section[] = [
     desc: "Up to 5 photos per gig, one per cell in Picture 1 … Picture 5 (Insert → Picture/Image → in cell). Or type file names there and add the files on the page.",
   },
   {
-    key: "action", label: "Delete", color: "red", cols: ["action"], need: "Delete file only", onlyFor: "delete",
+    key: "photoIds", label: "Photo IDs", color: "grey", cols: ["photoKeys"], need: "Don't change", onlyFor: ["all"],
+    desc: "Filled by Giggre: recognises the gig's current photos in the Picture cells. Never type in it.",
+  },
+  {
+    key: "action", label: "Delete", color: "red", cols: ["action"], need: "Optional", onlyFor: ["delete", "all"],
     desc: "Choose delete for each gig to remove. Leave it blank to keep the gig.",
+  },
+  {
+    key: "notes", label: "Your notes", color: "purple", cols: ["notes"], need: "Not uploaded", onlyFor: ["all"],
+    desc: "Anything you want to remember. Never uploaded or saved to the gig.",
   },
 ];
 
@@ -135,7 +150,9 @@ const COL: Record<GigCol, ColSpec> = {
   pic3:        { header: "Picture 3", width: 16, hint: "Optional 3rd photo.", rules: "Optional extra photo, same as Picture 1.", example: "" },
   pic4:        { header: "Picture 4", width: 16, hint: "Optional 4th photo.", rules: "Optional extra photo, same as Picture 1.", example: "" },
   pic5:        { header: "Picture 5", width: 16, hint: "Optional 5th photo.", rules: "Optional extra photo, same as Picture 1.", example: "" },
-  action:      { header: "Action", width: 12, hint: "delete, or blank to keep.", rules: "delete removes the gig; blank keeps it.", example: "delete" },
+  action:      { header: "Action", width: 12, hint: "delete, or blank to keep.", rules: "delete removes the gig; blank keeps it. Deleted = already deleted from an earlier upload (skipped).", example: "delete" },
+  photoKeys:   { header: "Photo IDs", width: 12, hint: "Filled by Giggre. Don't change.", rules: "Recognises the gig's current photos, so kept photos aren't uploaded again. Never change it.", example: "" },
+  notes:       { header: "Notes", width: 30, hint: "Your notes. Not uploaded.", rules: "Free text for yourself. Never uploaded or saved to the gig.", example: "Call host first" },
 };
 
 // Digits are kept so "Picture 1" … "Picture 5" stay apart.
@@ -150,12 +167,18 @@ for (const [key, c] of Object.entries(COL) as [GigCol, ColSpec][]) {
   for (const a of c.aliases ?? []) HEADER_KEYS.set(a, key);
 }
 
-const sectionsFor = (kind: SheetKind) => SECTIONS.filter((s) => !s.onlyFor || s.onlyFor === kind);
+const sectionsFor = (kind: SheetKind) => SECTIONS.filter((s) => !s.onlyFor || s.onlyFor.includes(kind));
 export const columnsFor = (kind: SheetKind): GigCol[] => sectionsFor(kind).flatMap((s) => s.cols);
 
 /** How a column is used in each kind of file. */
 function needFor(kind: SheetKind, key: GigCol, section: Section): Need | string {
-  if (section.key === "identity") return kind === "post" ? "Leave blank" : "Don't change";
+  if (section.key === "identity") return kind === "post" ? "Leave blank" : kind === "all" ? "Filled by Giggre" : "Don't change";
+  if (section.key === "notes") return "Not uploaded";
+  if (section.key === "photoIds") return "Filled by Giggre";
+  if (kind === "all") {
+    if (key === "action") return "Optional";
+    if (key === "skill" || key === "workers") return "Required (can't change once posted)";
+  }
   if (kind === "delete") return key === "action" ? "Required" : key === "host" ? "Don't change" : "Reference only";
   if (kind === "edit") {
     if (key === "skill" || key === "workers") return "Can't change";
@@ -167,8 +190,8 @@ function needFor(kind: SheetKind, key: GigCol, section: Section): Need | string 
 
 // ── Download ─────────────────────────────────────────────────────────────────
 
-const TITLES: Record<SheetKind, string> = { post: "Post new gigs", edit: "Edit gigs", delete: "Delete gigs" };
-const TAB: Record<SheetKind, string> = { post: "Post gigs", edit: "Edit gigs", delete: "Delete gigs" };
+const TITLES: Record<SheetKind, string> = { post: "Post new gigs", edit: "Edit gigs", delete: "Delete gigs", all: "Post, edit and delete gigs" };
+const TAB: Record<SheetKind, string> = { post: "Post gigs", edit: "Edit gigs", delete: "Delete gigs", all: "Excel workbook" };
 
 const STEPS: Record<SheetKind, string[]> = {
   post: [
@@ -183,6 +206,16 @@ const STEPS: Record<SheetKind, string[]> = {
     "Photos: Picture 1 … Picture 5 show the gig's current photos. Leave a photo to keep it. To remove one, click it and press Delete. To replace one, delete it and put a new picture in that cell. Empty Picture cells can take new photos (up to 5).",
     "Upload the file on Bulk Open Gigs → Edit gigs. You'll see every change (old → new) before anything is saved.",
     "A gig someone applied to, or that changed after you downloaded this file, isn't changed. Download a fresh copy for those.",
+  ],
+  all: [
+    "Each row is one gig. Rows with a Gig ID are existing gigs; Gig ID and Version are filled by Giggre, so never type in them or copy them to another row.",
+    "To post a new gig, fill in a row with a blank Gig ID (under the existing gigs is fine). To copy a gig, copy its row and clear Gig ID and Version on the copy.",
+    "To delete a gig, choose delete in its Action column. Deleting a row from the sheet does NOT delete the gig.",
+    "To change a gig, edit its cells. Skill and Workers Needed can't be changed. Photos: leave a picture to keep it, delete it to remove it, put a new picture in a Picture cell to add one.",
+    "A gig someone applied to, or that changed after you downloaded this file, isn't changed or deleted. Download a fresh copy for those.",
+    "Write anything you like in Notes, add your own columns, comments or colours: they're never uploaded. Only don't rename or delete the coloured column names.",
+    "Upload the file on the Bulk Open Gigs page. You'll see what will be posted, changed and deleted before anything happens.",
+    "After posting, download the updated file and keep working in that one: it has the new gigs' Gig IDs, so they aren't posted twice.",
   ],
   delete: [
     "On the Gigs sheet, choose delete in the Action column for each gig to remove. Leave it blank to keep the gig.",
@@ -199,7 +232,7 @@ function gigValues(g: SheetGig): Partial<Record<GigCol, Cell>> {
     skill: g.skill, experience: g.experience, payType: g.payType, amount: g.amount, workers: g.workers,
     date: d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : "",
     time: d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : "",
-    hours: g.hours ?? "", address: g.address, lat: g.lat ?? "", lng: g.lng ?? "", pictures: "", pic2: "", pic3: "", pic4: "", pic5: "", action: "",
+    hours: g.hours ?? "", address: g.address, lat: g.lat ?? "", lng: g.lng ?? "", pictures: "", pic2: "", pic3: "", pic4: "", pic5: "", photoKeys: g.photoKeys ?? "", action: "", notes: "",
   };
 }
 
@@ -210,13 +243,16 @@ function instructionsSheet(kind: SheetKind): StyledSheet {
   const mergeRow = (from: number, to: number) => merges.push(`${colName(from)}${rows.length}:${colName(to)}${rows.length}`);
 
   push([{ v: `Giggre · Bulk Open Gigs · ${TITLES[kind]}`, s: "title" }], 30);
-  push([{ v: `This file has an Instructions sheet (this one) and a Gigs sheet with one gig per row. Upload it on the Bulk Open Gigs page, ${TAB[kind]} tab. Post, Edit and Delete files all use the same columns${kind === "delete" ? "; this Delete file adds an Action column" : ""}.`, s: "subtitle" }], 34);
+  push([{ v: kind === "all"
+    ? `This file has an Instructions sheet (this one) and a Gigs sheet with one gig per row. Post new gigs, change existing ones and delete gigs, all from this one file, then upload it on the Bulk Open Gigs page.`
+    : `This file has an Instructions sheet (this one) and a Gigs sheet with one gig per row. Upload it on the Bulk Open Gigs page, ${TAB[kind]} tab. Post, Edit and Delete files all use the same columns${kind === "delete" ? "; this Delete file adds an Action column" : ""}.`, s: "subtitle" }], 34);
   mergeRow(0, 3);
   push([]);
 
   push([{ v: "Colour legend", s: "bold" }], 20);
   for (const sec of sectionsFor(kind)) {
-    const need = sec.key === "identity" ? (kind === "post" ? "Leave blank" : "Don't change") : kind === "delete" && sec.key !== "action" ? "Reference only" : sec.need;
+    const need = sec.key === "identity" ? (kind === "post" ? "Leave blank" : kind === "all" ? "Filled by Giggre" : "Don't change")
+      : kind === "delete" && sec.key !== "action" ? "Reference only" : sec.need;
     push([{ v: sec.label, s: `band:${sec.color}` }, { v: need, s: "text" }, { v: sec.desc, s: "textWrap" }, { v: null, s: "textWrap" }], 32);
     mergeRow(2, 3);
   }
@@ -260,7 +296,7 @@ function gigsSheet(kind: SheetKind, gigs: SheetGig[], skills: string[] | undefin
   }
   const heads: SCell[] = cols.map((k) => ({ v: COL[k].header, s: "colHead" }));
   const hints: SCell[] = cols.map((k) => ({ v: COL[k].hint, s: "hint" }));
-  const system = new Set<GigCol>(["gigId", "version"]);
+  const system = new Set<GigCol>(["gigId", "version", "photoKeys"]);
   const images: NonNullable<StyledSheet["images"]> = [];
   const data = gigs.map((g, gi) => {
     const v = gigValues(g);
@@ -287,7 +323,16 @@ function gigsSheet(kind: SheetKind, gigs: SheetGig[], skills: string[] | undefin
       }
       return { v: v[k] ?? null, s: system.has(k) ? "dataSystem" : "data" } as SCell;
     });
-    return { cells, height: hasPhoto ? PHOTO_ROW_PT : undefined };
+    // Tall enough for the longest wrapped text (capped; the full text is in the cell).
+    const lines = Math.max(1, ...cols.map((k, i) => {
+      if (system.has(k)) return 1;
+      const t = String((cells[i] as SCell).v ?? "");
+      const per = Math.max(1, COL[k].width - 1);
+      return t.split(/\r?\n/).reduce((n, part) => n + Math.max(1, Math.ceil(part.length / per)), 0);
+    }));
+    const textPt = Math.min(MAX_TEXT_ROW_PT, lines * LINE_PT + 3);
+    if (hasPhoto) return { cells, height: Math.max(PHOTO_ROW_PT, textPt) };
+    return lines > 1 ? { cells, height: textPt, autoHeight: true } : { cells };
   });
 
   const range = (k: GigCol) => `${colName(idx(k))}4:${colName(idx(k))}2000`;
@@ -295,14 +340,16 @@ function gigsSheet(kind: SheetKind, gigs: SheetGig[], skills: string[] | undefin
     { range: range("experience"), values: ["entry", "intermediate", "expert"] },
     { range: range("payType"), values: ["flat", "hourly"] },
   ];
-  if (skills?.length && kind === "post") dropdowns.push({ range: range("skill"), values: skills });
-  if (kind === "delete") dropdowns.push({ range: range("action"), values: ["delete"] });
+  if (skills?.length && (kind === "post" || kind === "all")) dropdowns.push({ range: range("skill"), values: skills });
+  if (kind === "delete" || kind === "all") dropdowns.push({ range: range("action"), values: ["delete"] });
 
   return {
     name: "Gigs",
     rows: [{ cells: bands, height: 22 }, { cells: heads, height: 30 }, { cells: hints, height: 44 }, ...data],
     merges,
     widths: cols.map((k) => COL[k].width),
+    // Rows the admin types in wrap too (system columns stay on one line).
+    colStyles: cols.map((k) => (system.has(k) ? undefined : "wrap")),
     freeze: { row: 4, col: idx("title") + 2 },
     dropdowns,
     tabColor: kind === "delete" ? "FFC0392B" : "FF2E9E5B",
@@ -313,7 +360,9 @@ function gigsSheet(kind: SheetKind, gigs: SheetGig[], skills: string[] | undefin
 /** Downloads the Post template (no gigs) or an Edit / Delete file of `gigs`. */
 export function downloadGigSheet(kind: SheetKind, gigs: SheetGig[] = [], opts: { skills?: string[]; photos?: Map<string, (SheetPhoto | null)[]> } = {}) {
   const day = new Date().toISOString().slice(0, 10);
-  const name = kind === "post" ? "giggre-bulk-post-gigs-template.xlsx" : `giggre-${kind}-gigs-${day}.xlsx`;
+  const name = kind === "post" ? "giggre-bulk-post-gigs-template.xlsx"
+    : kind === "all" ? (gigs.length ? `giggre-gigs-${day}.xlsx` : "giggre-gigs-template.xlsx")
+    : `giggre-${kind}-gigs-${day}.xlsx`;
   return downloadWorkbook(name, [instructionsSheet(kind), gigsSheet(kind, gigs, opts.skills, opts.photos)]);
 }
 

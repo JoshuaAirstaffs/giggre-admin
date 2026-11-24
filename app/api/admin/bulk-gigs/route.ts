@@ -164,6 +164,7 @@ export async function POST(req: NextRequest) {
     if (!create) return NextResponse.json({ ok: true, preview });
 
     // Same shape as OpenGigModel.toMap() + the extras post_open_gig_screen adds.
+    const createdAt = Timestamp.now();
     const ref = await adminDb.collection("open_gigs").add({
       hostId: host.id,
       hostName: preview.hostName,
@@ -180,7 +181,7 @@ export async function POST(req: NextRequest) {
       address: location.address,
       status: "open",
       gigType: "open",
-      createdAt: Timestamp.now(),
+      createdAt,
       ...(scheduledAt ? { scheduledDate: Timestamp.fromDate(scheduledAt) } : {}),
       workerSlots: workers,
       ratePerSlot: amount,
@@ -195,7 +196,8 @@ export async function POST(req: NextRequest) {
         batchId: s(body?.batchId) || null,
       },
     });
-    return NextResponse.json({ ok: true, preview, gigId: ref.id });
+    // version = what gigVersion() gives a gig never edited (written back into the workbook).
+    return NextResponse.json({ ok: true, preview, gigId: ref.id, version: String(createdAt.toMillis()) });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? "Unexpected error." }, { status: 500 });
   }

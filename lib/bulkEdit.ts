@@ -9,7 +9,8 @@
 // overwritten.
 
 import { parseSchedule, readFirstSheet, type ResolvedLocation } from "@/lib/bulkGigs";
-import { downloadGigSheet, parseGigTable, type SheetGig } from "@/lib/gigSheet";
+import { CURRENT_PHOTO_PIC_RE, CURRENT_PHOTO_RE, PICTURE_COLS, downloadGigSheet, parseGigTable, type SheetGig, type SheetPhoto } from "@/lib/gigSheet";
+import { readSheetPictures, type SheetPicture } from "@/lib/xlsxImages";
 
 /** A gig that can be edited, with its current values (for the download). */
 export type EditableGig = SheetGig;
@@ -35,7 +36,22 @@ export interface EditRow {
   address: string;
   lat: string;
   lng: string;
+  /**
+   * The gig's photos after the edit, in order (Picture 1 … 5, then any other
+   * pictures on the row). Undefined when the file has no Picture columns
+   * (an older file): photos are then left as they are.
+   */
+  photos?: PhotoSlot[];
+  /** A Picture cell that's neither a picture, "Current photo N" nor blank. */
+  photoError?: string;
 }
+
+/**
+ * One photo of the edited gig: keep the gig's existing photo N (1-based),
+ * a new picture from the file (index into that row's files; checks only),
+ * or a new picture already stored (save).
+ */
+export type PhotoSlot = { keep: number } | { newIdx: number } | { url: string };
 
 export interface EditChange {
   label: string;
@@ -53,19 +69,56 @@ export interface EditCheck {
   /** Location looked up during the check; sent back on save so it isn't geocoded twice. */
   resolved?: ResolvedLocation | null;
   saved?: boolean;
+  /** The gig's host (new photos are stored in their folder). */
+  hostId?: string;
+  /** After a save: the gig's new Version (its edit time). */
+  version?: string;
 }
 
-export function downloadEditSheet(gigs: EditableGig[]) {
-  return downloadGigSheet("edit", gigs);
+/**
+ * Downloads the Edit file with each gig's current photos embedded in Picture 1–5.
+ * `loadPhoto` fetches one photo (null if it can't, then a link is shown instead).
+ */
+export async function downloadEditSheet(
+  gigs: EditableGig[],
+  loadPhoto?: (url: string) => Promise<SheetPhoto | null>,
+  onProgress?: (done: number, total: number) => void,
+) {
+  const photos = new Map<string, (SheetPhoto | null)[]>();
+  if (loadPhoto) {
+    const jobs = gigs.flatMap((g) => (g.images ?? []).slice(0, PICTURE_COLS.length).map((url, i) => ({ g, url, i })));
+    let done = 0;
+    onProgress?.(0, jobs.length);
+    // A few at a time.
+    const queue = [...jobs];
+    const worker = async () => {
+      for (let job = queue.shift(); job; job = queue.shift()) {
+        const thumb = await loadPhoto(job.url);
+        const list = photos.get(job.g.id) ?? [];
+        list[job.i] = thumb;
+        photos.set(job.g.id, list);
+        onProgress?.(++done, jobs.length);
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, worker));
+  }
+  return downloadGigSheet("edit", gigs, { photos });
 }
 
-/** Reads an edited sheet. Throws a readable Error for unusable files. */
-export async function readEditFile(file: File): Promise<EditRow[]> {
+/**
+ * Reads an edited sheet: the rows, and the new pictures placed on each row
+ * (by Excel row number). Throws a readable Error for unusable files.
+ */
+export async function readEditFile(file: File): Promise<{ rows: EditRow[]; files: Map<number, File[]> }> {
   const sheet = await readFirstSheet(file, "Gigs");
   const table = parseGigTable(sheet, ["gigId", "host", "version"]);
+  const { pictures } = await readSheetPictures(file, "Gigs").catch(() => ({ pictures: [] as SheetPicture[], skipped: 0 }));
+  const picCols = PICTURE_COLS.map((k) => table.colOf(k));
+  const files = new Map<number, File[]>();
+
   const rows: EditRow[] = table.rows.map((r) => {
     const { scheduledAt, scheduleText } = parseSchedule(r.get("date"), r.get("time"));
-    return {
+    const row: EditRow = {
       row: r.n,
       gigId: r.text("gigId"),
       host: r.text("host"),
@@ -84,11 +137,46 @@ export async function readEditFile(file: File): Promise<EditRow[]> {
       lat: r.text("lat"),
       lng: r.text("lng"),
     };
+
+    if (table.has("pictures")) {
+      // Each Picture cell: a picture in it = new (replaces what was there),
+      // "Current photo N" = keep, blank = nothing. Pictures elsewhere on the row are added after.
+      const onRow = pictures.filter((p) => p.row === r.n);
+      const used = new Set<SheetPicture>();
+      const mine: File[] = [];
+      const slots: PhotoSlot[] = [];
+      // An existing photo embedded by the download keeps its name; anything else is new.
+      const slotFor = (p: SheetPicture): PhotoSlot => {
+        const keep = p.label?.match(CURRENT_PHOTO_PIC_RE);
+        if (keep) return { keep: Number(keep[1]) };
+        mine.push(p.file);
+        return { newIdx: mine.length - 1 };
+      };
+      PICTURE_COLS.forEach((k, i) => {
+        const col = picCols[i];
+        if (col == null) return;
+        const inCell = onRow.filter((p) => p.col === col);
+        if (inCell.length) {
+          for (const p of inCell) { used.add(p); slots.push(slotFor(p)); }
+          return;
+        }
+        const t = r.text(k);
+        const keep = t.match(CURRENT_PHOTO_RE);
+        if (keep) slots.push({ keep: Number(keep[1]) });
+        else if (t && !/^#[A-Z0-9/!?]+$/i.test(t) && !/DISPIMG\(/i.test(t)) {
+          row.photoError = `${PICTURE_COLS.length > 1 ? `Picture ${i + 1}` : "Picture"} has "${t}". Put the picture itself in the cell, keep "Current photo N", or leave it blank.`;
+        }
+      });
+      for (const p of onRow) if (!used.has(p)) slots.push(slotFor(p));
+      row.photos = slots;
+      if (mine.length) files.set(r.n, mine);
+    }
+    return row;
   });
   const noId = rows.filter((r) => !r.gigId);
   if (noId.length) {
     throw new Error(`Row${noId.length > 1 ? "s" : ""} ${noId.slice(0, 5).map((r) => r.row).join(", ")} ha${noId.length > 1 ? "ve" : "s"} no Gig ID. New gigs go on the Post gigs tab; edit only gigs downloaded here.`);
   }
   if (rows.length === 0) throw new Error("No gigs found under the column names.");
-  return rows;
+  return { rows, files };
 }

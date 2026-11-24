@@ -18,7 +18,10 @@ import type { SheetGig } from "@/lib/gigSheet";
 
 export const maxDuration = 60;
 
-const MAX_HOSTS = 20;
+/** Hosts in one delete (the page can have up to 300 chosen; keep in sync with bulkUi MAX_HOSTS). */
+const MAX_HOSTS = 300;
+/** Hosts per search request (the page searches a long list in batches, so a request stays well under the time limit). */
+const SEARCH_BATCH = 50;
 const MAX_DELETE = 500;
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -69,16 +72,19 @@ async function authorize(req: NextRequest) {
 
 const millis = (t: unknown) => (t as Timestamp | undefined)?.toMillis?.() ?? null;
 
-async function searchHost(query: string, seen: Set<string>): Promise<{ lookup: HostLookup; gigs: HostGig[] }> {
-  const doc = await findHost(query);
-  if (!doc) return { lookup: { query, host: null, deletable: 0, inUse: 0 }, gigs: [] };
-  const h = doc.data() ?? {};
-  const host = { id: doc.id, name: String(h.name ?? ""), email: String(h.email ?? "") };
-  // Same account typed twice (e.g. email and user ID): list its gigs once.
-  if (seen.has(doc.id)) return { lookup: { query, host, deletable: 0, inUse: 0 }, gigs: [] };
-  seen.add(doc.id);
+/** Runs `fn` over `items`, at most `limit` at a time, keeping the order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]);
+  }));
+  return out;
+}
 
-  const snap = await adminDb.collection("open_gigs").where("hostId", "==", doc.id).get();
+/** A found host's deletable / editable gigs (nobody applied, nobody hired). */
+async function hostGigs(host: { id: string; name: string; email: string }): Promise<{ gigs: HostGig[]; inUse: number }> {
+  const snap = await adminDb.collection("open_gigs").where("hostId", "==", host.id).get();
   const checked = await Promise.all(snap.docs.map(async (d) => {
     const g = d.data();
     if (blockedReason(g, false)) return null;
@@ -88,7 +94,16 @@ async function searchHost(query: string, seen: Set<string>): Promise<{ lookup: H
     return gig;
   }));
   const gigs = checked.filter((g): g is HostGig => g !== null);
-  return { lookup: { query, host, deletable: gigs.length, inUse: snap.size - gigs.length }, gigs };
+  return { gigs, inUse: snap.size - gigs.length };
+}
+
+/** One row of the "hosts with open gigs" list. */
+export interface OpenGigHost {
+  id: string;
+  name: string;
+  email: string;
+  /** Posted time (ms) of each open gig nobody applied to yet; for counts and the date filter. */
+  posted: number[];
 }
 
 export async function POST(req: NextRequest) {
@@ -104,20 +119,61 @@ export async function POST(req: NextRequest) {
         ? [...new Set<string>(body.hosts.filter((x: unknown): x is string => typeof x === "string").map((x: string) => x.trim()).filter(Boolean))]
         : [];
       if (queries.length === 0) return NextResponse.json({ error: "Enter at least one host email or user ID." }, { status: 400 });
-      if (queries.length > MAX_HOSTS) return NextResponse.json({ error: `Search at most ${MAX_HOSTS} hosts at a time.` }, { status: 400 });
+      if (queries.length > SEARCH_BATCH) return NextResponse.json({ error: `Search at most ${SEARCH_BATCH} hosts per request.` }, { status: 400 });
 
-      // One at a time so a repeated account is recognised in order.
-      const seen = new Set<string>();
+      // Look the accounts up in parallel, then each account's gigs once
+      // (the same account typed twice, e.g. email and user ID, is listed once).
+      const docs = await mapLimit(queries, 10, (q) => findHost(q).catch(() => null));
+      const unique = new Map<string, { id: string; name: string; email: string }>();
+      for (const d of docs) {
+        if (d && !unique.has(d.id)) unique.set(d.id, { id: d.id, name: String(d.data()?.name ?? ""), email: String(d.data()?.email ?? "") });
+      }
+      const ids = [...unique.keys()];
+      const lists = await mapLimit(ids, 8, (id) => hostGigs(unique.get(id)!));
+      const byHost = new Map(ids.map((id, i) => [id, lists[i]]));
       const hosts: HostLookup[] = [];
       const gigs: HostGig[] = [];
-      for (const q of queries) {
-        const r = await searchHost(q, seen);
-        hosts.push(r.lookup);
+      const listed = new Set<string>();
+      queries.forEach((query, i) => {
+        const d = docs[i];
+        if (!d) { hosts.push({ query, host: null, deletable: 0, inUse: 0 }); return; }
+        const host = unique.get(d.id)!;
+        if (listed.has(d.id)) { hosts.push({ query, host, deletable: 0, inUse: 0 }); return; }
+        listed.add(d.id);
+        const r = byHost.get(d.id)!;
+        hosts.push({ query, host, deletable: r.gigs.length, inUse: r.inUse });
         gigs.push(...r.gigs);
-      }
+      });
       gigs.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
       const result: HostGigsResult = { hosts, gigs };
       return NextResponse.json({ ok: true, ...result });
+    }
+
+    if (action === "hosts") {
+      // Every host with open gigs nobody has applied to yet, from one query.
+      // (The workers sub-collection isn't read here, so a count can include a
+      // gig with a hired worker; the download leaves those out.)
+      const snap = await adminDb.collection("open_gigs").where("status", "==", "open")
+        .select("hostId", "status", "createdAt", "applicants", "filledSlotCount", "assignedWorkerId", "workerId", "slotsClosed").get();
+      const posted = new Map<string, number[]>();
+      for (const d of snap.docs) {
+        const g = d.data();
+        const hostId = typeof g.hostId === "string" ? g.hostId : "";
+        if (!hostId || blockedReason(g, false) || g.slotsClosed === true || g.assignedWorkerId || g.workerId) continue;
+        posted.set(hostId, [...(posted.get(hostId) ?? []), millis(g.createdAt) ?? 0]);
+      }
+      const ids = [...posted.keys()];
+      const hosts: OpenGigHost[] = [];
+      for (let i = 0; i < ids.length; i += 100) {
+        const users = await adminDb.getAll(...ids.slice(i, i + 100).map((id) => adminDb.doc(`users/${id}`)));
+        for (const u of users) {
+          if (!u.exists) continue;
+          const h = u.data() ?? {};
+          hosts.push({ id: u.id, name: String(h.name ?? ""), email: String(h.email ?? ""), posted: posted.get(u.id) ?? [] });
+        }
+      }
+      hosts.sort((a, b) => b.posted.length - a.posted.length);
+      return NextResponse.json({ ok: true, hosts });
     }
 
     if (action === "delete") {

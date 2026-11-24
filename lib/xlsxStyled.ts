@@ -8,7 +8,7 @@ export type Cell = string | number | null | undefined;
 /** Named cell styles (see STYLES below). */
 export type StyleName =
   | "default" | "title" | "subtitle" | "bold" | "text" | "textWrap"
-  | "colHead" | "hint" | "data" | "dataSystem" | "example" | "link"
+  | "colHead" | "hint" | "data" | "dataSystem" | "example" | "link" | "wrap"
   | `band:${BandColor}` | `chip:${BandColor}`;
 
 export type BandColor = "blue" | "grey" | "green" | "orange" | "red" | "navy" | "purple";
@@ -19,7 +19,10 @@ export interface SCell { v: Cell; s?: StyleName; f?: string }
 export interface StyledSheet {
   name: string;
   hidden?: boolean;
-  rows: { cells: (SCell | Cell)[]; height?: number }[];
+  /** height in points; with autoHeight it's only a starting height the app may re-fit (wrapped text). */
+  rows: { cells: (SCell | Cell)[]; height?: number; autoHeight?: boolean }[];
+  /** Default style of each whole column (e.g. wrap text in rows the user adds). */
+  colStyles?: (StyleName | undefined)[];
   /** Column widths in characters. */
   widths?: number[];
   /** e.g. "A1:C1" */
@@ -99,7 +102,8 @@ const XF: Record<string, Xf> = {
   textWrap:   { font: 0, fill: 0, border: 1, v: "top", wrap: true },
   colHead:    { font: 1, fill: 2, border: 1, h: "center", v: "center", wrap: true },
   hint:       { font: 4, fill: 3, border: 1, v: "top", wrap: true },
-  data:       { font: 0, fill: 0, border: 1, v: "top" },
+  data:       { font: 0, fill: 0, border: 1, v: "top", wrap: true },
+  wrap:       { font: 0, fill: 0, border: 0, v: "top", wrap: true },
   dataSystem: { font: 5, fill: 4, border: 1, v: "top" },
   example:    { font: 0, fill: 5, border: 1, v: "top", wrap: true },
   link:       { font: 7, fill: 0, border: 1, v: "top" },
@@ -191,10 +195,13 @@ function sheetXml(sh: StyledSheet, listRefs: string[]): string {
     ? `<pane${f.col > 1 ? ` xSplit="${f.col - 1}"` : ""}${f.row > 1 ? ` ySplit="${f.row - 1}"` : ""} topLeftCell="${colName(f.col - 1)}${f.row}" activePane="${f.row > 1 && f.col > 1 ? "bottomRight" : f.row > 1 ? "bottomLeft" : "topRight"}" state="frozen"/>`
     : "";
   const rows = sh.rows.map((r, i) =>
-    `<row r="${i + 1}"${r.height ? ` ht="${r.height}" customHeight="1"` : ""}>${r.cells.map((c, j) => cellXml(c, `${colName(j)}${i + 1}`)).join("")}</row>`,
+    `<row r="${i + 1}"${r.height ? ` ht="${r.height}"${r.autoHeight ? "" : ` customHeight="1"`}` : ""}>${r.cells.map((c, j) => cellXml(c, `${colName(j)}${i + 1}`)).join("")}</row>`,
   ).join("");
   const cols = sh.widths?.length
-    ? `<cols>${sh.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("")}</cols>`
+    ? `<cols>${sh.widths.map((w, i) => {
+        const st = sh.colStyles?.[i];
+        return `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"${st ? ` style="${styleIndex(st)}"` : ""}/>`;
+      }).join("")}</cols>`
     : "";
   const merges = sh.merges?.length ? `<mergeCells count="${sh.merges.length}">${sh.merges.map((m) => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>` : "";
   const dv = sh.dropdowns?.length

@@ -6,7 +6,7 @@
 
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { PICTURE_COLS, downloadGigSheet, parseGigTable } from "@/lib/gigSheet";
+import { PICTURE_COLS, downloadGigSheet, parseGigTable, type SheetRow } from "@/lib/gigSheet";
 
 /** One spreadsheet row, as sent to /api/admin/bulk-gigs. */
 export interface BulkGigRow {
@@ -125,6 +125,10 @@ export async function readFirstSheet(file: File, preferName?: string): Promise<C
 
   const rows: Cell[][] = [];
   for (const row of Array.from(parse(sheetXml).getElementsByTagName("row"))) {
+    // Placed by its row number: Excel leaves empty rows out of the file, and
+    // row numbers must match the sheet (pictures, writing Gig IDs back).
+    const rn = Number(row.getAttribute("r"));
+    const at = Number.isInteger(rn) && rn > 0 ? rn - 1 : rows.length;
     const out: Cell[] = [];
     for (const c of Array.from(row.getElementsByTagName("c"))) {
       const idx = colIndex(c.getAttribute("r") ?? "A1");
@@ -137,8 +141,9 @@ export async function readFirstSheet(file: File, preferName?: string): Promise<C
       else if (v != null) value = Number.isFinite(Number(v)) ? Number(v) : v;
       out[idx] = value;
     }
-    rows.push(out);
+    rows[at] = out;
   }
+  for (let i = 0; i < rows.length; i++) rows[i] ??= [];
   return rows;
 }
 
@@ -216,31 +221,34 @@ export async function readBulkGigFile(file: File): Promise<{ rows: BulkGigRow[];
     throw new Error(`Row${existing.length > 1 ? "s" : ""} ${nums}${existing.length > 5 ? "…" : ""} already ${existing.length > 1 ? "have" : "has"} a Gig ID, so ${existing.length > 1 ? "they are" : "it's an"} existing gig${existing.length > 1 ? "s" : ""}. Use Edit gigs to change them, or clear Gig ID and Version to post copies as new gigs.`);
   }
 
-  const rows: BulkGigRow[] = table.rows.map((r) => {
-    const { scheduledAt, scheduleText } = parseSchedule(r.get("date"), r.get("time"));
-    return {
-      host: r.text("host"),
-      title: r.text("title"),
-      description: r.text("description"),
-      skill: r.text("skill"),
-      experience: r.text("experience"),
-      payType: r.text("payType"),
-      amount: r.text("amount"),
-      workers: r.text("workers"),
-      hours: r.text("hours"),
-      scheduledAt,
-      scheduleText,
-      address: r.text("address"),
-      lat: r.text("lat"),
-      lng: r.text("lng"),
-      // A picture placed in the cell reads as a placeholder value
-      // (#VALUE! in Excel, =DISPIMG("ID_…") in WPS); the picture itself is read separately.
-      pictures: PICTURE_COLS.map((k) => r.text(k))
-        .filter((t) => t && !/^#[A-Z0-9/!?]+$/i.test(t) && !/DISPIMG\(/i.test(t))
-        .join(", "),
-    };
-  });
+  const rows: BulkGigRow[] = table.rows.map(bulkRowFrom);
   const sheetRows = table.rows.map((r) => r.n);
   if (rows.length === 0) throw new Error("No gigs found under the header row.");
   return { rows, sheetRows };
+}
+
+/** One sheet row as a gig to post. */
+export function bulkRowFrom(r: SheetRow): BulkGigRow {
+  const { scheduledAt, scheduleText } = parseSchedule(r.get("date"), r.get("time"));
+  return {
+    host: r.text("host"),
+    title: r.text("title"),
+    description: r.text("description"),
+    skill: r.text("skill"),
+    experience: r.text("experience"),
+    payType: r.text("payType"),
+    amount: r.text("amount"),
+    workers: r.text("workers"),
+    hours: r.text("hours"),
+    scheduledAt,
+    scheduleText,
+    address: r.text("address"),
+    lat: r.text("lat"),
+    lng: r.text("lng"),
+    // A picture placed in the cell reads as a placeholder value
+    // (#VALUE! in Excel, =DISPIMG("ID_…") in WPS); the picture itself is read separately.
+    pictures: PICTURE_COLS.map((k) => r.text(k))
+      .filter((t) => t && !/^#[A-Z0-9/!?]+$/i.test(t) && !/DISPIMG\(/i.test(t))
+      .join(", "),
+  };
 }

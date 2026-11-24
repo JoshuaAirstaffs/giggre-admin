@@ -9,7 +9,8 @@ import { auth } from "@/lib/firebase";
 import { readApiJson } from "@/lib/apiResponse";
 import { writeLog } from "@/lib/activitylog";
 import { useAuth } from "@/context/AuthContext";
-import { downloadEditSheet, readEditFile, type EditableGig, type EditCheck, type EditRow } from "@/lib/bulkEdit";
+import { downloadEditSheet, readEditFile, type EditableGig, type EditCheck, type EditRow, type PhotoSlot } from "@/lib/bulkEdit";
+import { deleteGigPhotos, loadPhotoThumb, uploadGigPhoto } from "@/lib/gigPhotos";
 import { HostPicker, MAX_HOSTS, hostKey } from "./bulkUi";
 
 async function call<T extends object>(body: object): Promise<T> {
@@ -35,6 +36,8 @@ interface Item {
   row: EditRow;
   state: ItemState;
   check?: EditCheck;
+  /** New pictures placed on this row in the file (row.photos refers to them by index). */
+  files: File[];
 }
 
 /**
@@ -101,9 +104,9 @@ export default function EditGigs() {
     if (!file || busy) return;
     setBusy("reading");
     try {
-      const rows = await readEditFile(file);
+      const { rows, files } = await readEditFile(file);
       if (rows.length > MAX_ROWS) throw new Error(`The file has ${rows.length} gigs; edit at most ${MAX_ROWS} at a time.`);
-      const fresh: Item[] = rows.map((row) => ({ row, state: "checking" }));
+      const fresh: Item[] = rows.map((row) => ({ row, state: "checking", files: files.get(row.row) ?? [] }));
       setFileName(file.name);
       setItems(fresh);
       setBusy("checking");
@@ -130,6 +133,26 @@ export default function EditGigs() {
 
   const clearFile = () => { setItems([]); setFileName(""); };
 
+  // Download with each gig's current photos embedded in the Picture cells.
+  const [preparing, setPreparing] = useState<{ done: number; total: number } | null>(null);
+  const downloadSheet = async () => {
+    if (!list || preparing) return;
+    setPreparing({ done: 0, total: 0 });
+    try {
+      let missed = 0;
+      await downloadEditSheet(
+        list.gigs,
+        async (url) => { const t = await loadPhotoThumb(url); if (!t) missed++; return t; },
+        (done, total) => setPreparing({ done, total }),
+      );
+      if (missed) toast.warning(`${plural(missed, "photo")} couldn't be loaded`, "They're shown as \"Current photo N\" links instead and are kept as they are.");
+    } catch (e: any) {
+      toast.error("Download failed", e.message);
+    } finally {
+      setPreparing(null);
+    }
+  };
+
   // ── Save ───────────────────────────────────────────────────────────────
 
   const ready = items.filter((it) => it.state === "ready");
@@ -148,16 +171,35 @@ export default function EditGigs() {
       if (it.state !== "ready") continue;
       if (stopRef.current) break;
       setItem(i, { state: "saving" });
+      const uploaded: string[] = [];
       try {
-        const { check } = await call<{ check: EditCheck }>({ action: "save", row: it.row, resolved: it.check?.resolved ?? null });
+        // New photos go into the host's gig_images folder first; the save then lists their links.
+        let row = it.row;
+        if (row.photos?.some((sl) => "newIdx" in sl)) {
+          const hostId = it.check?.hostId;
+          if (!hostId) throw new Error("Couldn't tell which host this gig belongs to. Upload the file again.");
+          const photos: PhotoSlot[] = [];
+          for (const sl of row.photos) {
+            if (!("newIdx" in sl)) { photos.push(sl); continue; }
+            const file = it.files[sl.newIdx];
+            if (!file) throw new Error("A new photo is missing. Upload the file again.");
+            const up = await uploadGigPhoto(hostId, file);
+            uploaded.push(up.path);
+            photos.push({ url: up.url });
+          }
+          row = { ...row, photos };
+        }
+        const { check } = await call<{ check: EditCheck }>({ action: "save", row, resolved: it.check?.resolved ?? null });
         if (check.saved) {
           setItem(i, { state: "saved", check });
           saved.push({ gigId: check.gigId, title: check.title, changes: check.changes.map((c) => c.label) });
         } else {
+          await deleteGigPhotos(uploaded);
           setItem(i, { state: "failed", check });
           failed++;
         }
       } catch (e: any) {
+        await deleteGigPhotos(uploaded);
         setItem(i, { state: "failed", check: { ...(it.check as EditCheck), errors: [e.message] } });
         failed++;
       }
@@ -254,8 +296,8 @@ export default function EditGigs() {
                 {locked > 0 && <> {plural(locked, "gig")} already in progress can&apos;t be edited.</>}
               </p>
             </div>
-            <Button variant="secondary" size="sm" icon={Download} disabled={list.gigs.length === 0} onClick={() => downloadEditSheet(list.gigs)}>
-              Download Excel
+            <Button variant="secondary" size="sm" icon={Download} loading={!!preparing} disabled={list.gigs.length === 0 || !!preparing} onClick={downloadSheet}>
+              {preparing ? (preparing.total ? `Adding photos ${preparing.done}/${preparing.total}…` : "Preparing…") : "Download Excel"}
             </Button>
           </div>
 
@@ -276,7 +318,8 @@ export default function EditGigs() {
           </div>
 
           <ul className="eg-rules">
-            <li>Change only the cells you want: title, description, experience, pay type, amount, hours, date/time, address.</li>
+            <li>Change only the cells you want: title, description, experience, pay type, amount, hours, date/time, address, photos.</li>
+            <li><b>Photos</b>: Picture 1–5 show the gig&apos;s photos. Leave a photo to keep it; click it and press Delete to remove it; delete it and put a new picture in the cell to replace it.</li>
             <li>To move a gig, change the <b>Address</b> (it&apos;s looked up on the map) or the <b>Latitude/Longitude</b>.</li>
             <li>Don&apos;t change <b>Gig ID</b>, <b>Host email</b> or <b>Version</b>. <b>Skill</b> and workers needed can&apos;t be changed.</li>
           </ul>

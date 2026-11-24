@@ -1,15 +1,21 @@
 "use client";
 
-// Shared pieces of the Bulk Open Gigs tabs (Delete / Edit): the step styles
-// and the multi-host picker (exact email or user ID, one chip per host).
+// Shared pieces of the Bulk Open Gigs tabs: the step styles, the multi-host
+// picker (exact email or user ID, one chip per host), the row check / post
+// call and the Latitude/Longitude form for addresses the map can't find.
 
 import { useState } from "react";
-import { Search, UserX, X } from "lucide-react";
+import { MapPin, Search, UserX, X } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toaster";
+import { auth } from "@/lib/firebase";
+import { readApiJson } from "@/lib/apiResponse";
+import type { BulkGigPreview } from "@/lib/bulkGigs";
 
-/** Keep in sync with MAX_HOSTS in the host-gigs and edit routes. */
-export const MAX_HOSTS = 20;
+/** Keep in sync with MAX_HOSTS in the host-gigs route. Searched in batches of HOST_BATCH. */
+export const MAX_HOSTS = 300;
+/** Hosts per search request (the host-gigs route takes up to 50). */
+export const HOST_BATCH = 50;
 
 export const hostKey = (q: string) => q.trim().toLowerCase();
 
@@ -24,7 +30,7 @@ export function BulkStyles() {
         .dh-head p { margin: 3px 0 0; font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; }
         .dh-head .txt { flex: 1; min-width: 220px; }
         .dh-search { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
-        .dh-box { flex: 1; min-width: 240px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--bg-elevated); color: var(--text-muted); cursor: text; min-height: 38px; }
+        .dh-box { flex: 1; min-width: 240px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--bg-elevated); color: var(--text-muted); cursor: text; min-height: 38px; max-height: 170px; overflow-y: auto; }
         .dh-box:focus-within { border-color: var(--blue); }
         .dh-box input { flex: 1; min-width: 160px; border: none; background: none; outline: none; padding: 3px 0; font: inherit; font-size: 13px; color: var(--text-primary); }
         .dh-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 3px 4px 3px 9px; border-radius: 999px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-primary); max-width: 100%; overflow-wrap: anywhere; }
@@ -77,6 +83,15 @@ export function BulkStyles() {
         .dh-foot .sum small { display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 11.5px; margin-top: 2px; }
         .dh-chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--bg-elevated); color: var(--text-secondary); }
         .dh-err { color: var(--red); font-size: 12px; display: flex; gap: 5px; align-items: flex-start; }
+        .bg-ll { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-width: 260px; }
+        .bg-ll-row { display: flex; gap: 6px; }
+        .bg-ll input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 12.5px; font-family: inherit; }
+        .bg-ll input:focus { outline: none; border-color: var(--blue); }
+        .bg-ll input.bad { border-color: var(--red); }
+        .bg-sug { display: flex; gap: 6px; align-items: flex-start; text-align: left; padding: 7px 9px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-primary); font-size: 12px; font-family: inherit; cursor: pointer; transition: border-color .15s; }
+        .bg-sug:hover:not(:disabled) { border-color: var(--blue); }
+        .bg-sug:disabled { opacity: .6; cursor: default; }
+        .bg-ll a { font-size: 11.5px; color: var(--blue); }
         .dh-list { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--text-secondary); max-height: 180px; overflow-y: auto; }
       `}</style>;
 }
@@ -147,6 +162,88 @@ export function HostPicker({ entries, onChange, onRemove, statusOf, onSearch, se
       <Button type="submit" variant="primary" size="sm" icon={Search} loading={searching} disabled={(!entries.length && !draft.trim()) || searching}>
         {buttonLabel}
       </Button>
+    </form>
+  );
+}
+
+/** A place Google Maps found for an address the map lookup couldn't. */
+export interface Suggestion { address: string; lat: number; lng: number }
+
+/** Checks (create: false) or posts (create: true) one row via /api/admin/bulk-gigs. */
+export async function callRow(body: object) {
+  const token = await auth.currentUser?.getIdToken();
+  const res = await fetch("/api/admin/bulk-gigs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  const data = await readApiJson<{ ok?: boolean; errors?: string[]; skillNotFound?: boolean; locationNotFound?: boolean; suggestions?: Suggestion[]; preview?: BulkGigPreview; gigId?: string; version?: string }>(res);
+  if (!res.ok) return { ok: false, errors: [data.error ?? `Request failed (HTTP ${res.status}).`] };
+  return data;
+}
+
+export const money = (p: BulkGigPreview) =>
+  `${p.currencyCode === "PHP" ? "₱" : "$"}${p.amount.toLocaleString()}${p.payType === "hourly" ? "/hr" : ""}`;
+
+/** Two numbers from text like "14.5995, 120.9842" (what Google Maps copies). */
+function splitCoords(text: string): [string, string] | null {
+  const m = text.trim().match(/^\(?\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*\)?$/);
+  return m ? [m[1], m[2]] : null;
+}
+
+const validLat = (v: string) => v.trim() !== "" && Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 90;
+const validLng = (v: string) => v.trim() !== "" && Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 180;
+
+/** Latitude/Longitude for a row whose address couldn't be found on the map. */
+export function LatLngForm({ suggestions, address, lat: lat0, lng: lng0, disabled, onSubmit }: {
+  suggestions: Suggestion[]; address: string; lat: string; lng: string; disabled: boolean; onSubmit: (lat: string, lng: string) => void;
+}) {
+  const [lat, setLat] = useState(lat0);
+  const [lng, setLng] = useState(lng0);
+  const [tried, setTried] = useState(false);
+  const ok = validLat(lat) && validLng(lng);
+  // Pasting "lat, lng" into either box fills both.
+  const onPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pair = splitCoords(e.clipboardData.getData("text"));
+    if (!pair) return;
+    e.preventDefault();
+    setLat(pair[0]);
+    setLng(pair[1]);
+  };
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setTried(true);
+    if (ok && !disabled) onSubmit(lat.trim(), lng.trim());
+  };
+  const search = address ? `https://www.google.com/maps/search/${encodeURIComponent(address)}` : "https://www.google.com/maps";
+  return (
+    <form className="bg-ll" onSubmit={submit}>
+      {suggestions.length > 0 && (
+        <>
+          <span className="bg-sub" style={{ marginTop: 0 }}>Google Maps found {suggestions.length === 1 ? "this place" : "these places"}. Check it&apos;s the right one:</span>
+          {suggestions.map((sg, i) => (
+            <button key={i} type="button" className="bg-sug" disabled={disabled} onClick={() => onSubmit(String(sg.lat), String(sg.lng))}>
+              <MapPin size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>
+                {sg.address}
+                <span className="bg-sub" style={{ display: "block" }}>{sg.lat.toFixed(6)}, {sg.lng.toFixed(6)} · Use this</span>
+              </span>
+            </button>
+          ))}
+          <span className="bg-sub" style={{ marginTop: 2 }}>Or type the coordinates:</span>
+        </>
+      )}
+      <div className="bg-ll-row">
+        <input aria-label="Latitude" placeholder="Latitude" inputMode="decimal" value={lat} disabled={disabled}
+          className={tried && !validLat(lat) ? "bad" : ""} onChange={(e) => setLat(e.target.value)} onPaste={onPaste} />
+        <input aria-label="Longitude" placeholder="Longitude" inputMode="decimal" value={lng} disabled={disabled}
+          className={tried && !validLng(lng) ? "bad" : ""} onChange={(e) => setLng(e.target.value)} onPaste={onPaste} />
+        <Button type="submit" variant="secondary" size="sm" disabled={disabled}>Use</Button>
+      </div>
+      <a href={search} target="_blank" rel="noreferrer">
+        Find it on Google Maps
+      </a>
+      <span className="bg-sub" style={{ marginTop: 0 }}>Right-click the spot → click the numbers to copy them, then paste here.</span>
     </form>
   );
 }

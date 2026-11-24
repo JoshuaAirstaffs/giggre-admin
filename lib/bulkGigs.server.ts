@@ -218,6 +218,30 @@ export async function resolveLocation(row: LocationInput): Promise<ResolvedLocat
   return { lat, lng, address: row.address, place: placeFrom(hit.address) };
 }
 
+/**
+ * Why a gig can't be edited, or null. Same as the app's canEditGig
+ * (edit_gig.dart), plus anything in the workers sub-collection.
+ */
+export function editBlockedReason(g: FirebaseFirestore.DocumentData, hasWorkers: boolean): string | null {
+  const status = String(g.status ?? "");
+  if (status !== "open") return `It's ${status || "not open"} now.`;
+  if (g.slotsClosed === true) return "Its slots are closed.";
+  const applicants = Array.isArray(g.applicants) ? g.applicants.length : 0;
+  if (applicants > 0) return `${applicants} worker${applicants === 1 ? " has" : "s have"} applied.`;
+  if (g.assignedWorkerId || g.workerId || Number(g.filledSlotCount ?? 0) > 0 || hasWorkers) return "A worker is already hired.";
+  return null;
+}
+
+/** Why a gig can't be deleted, or null (same rule as the Delete tab). */
+export function deleteBlockedReason(g: FirebaseFirestore.DocumentData, hasWorkers: boolean): string | null {
+  const status = String(g.status ?? "");
+  if (status !== "open") return `Status is ${status || "unknown"}.`;
+  const applicants = Array.isArray(g.applicants) ? g.applicants.length : 0;
+  if (applicants > 0) return `${applicants} worker${applicants === 1 ? " has" : "s have"} applied.`;
+  if (Number(g.filledSlotCount ?? 0) > 0 || hasWorkers) return "A worker is already hired.";
+  return null;
+}
+
 // ── Gig → sheet row (Edit / Delete downloads) ───────────────────────────────
 
 const toMillis = (t: unknown) => (t as { toMillis?: () => number } | undefined)?.toMillis?.() ?? null;
