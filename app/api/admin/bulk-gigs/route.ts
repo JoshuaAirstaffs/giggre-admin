@@ -114,7 +114,15 @@ export async function POST(req: NextRequest) {
         : await resolveLocation(row);
     if (typeof location === "string") errors.push(location);
 
-    const gigCountry = typeof location === "string" ? null : location.place?.countryCode ?? null;
+    // No country from the address lookup (e.g. a Google-suggested spot):
+    // fall back to the map position, so a gig in the Philippines isn't
+    // priced in USD and shown to US workers.
+    const phByCoords = (lat: number, lng: number) =>
+      lat >= 4.2 && lat <= 21.5 && lng >= 116 && lng <= 127 && !(lat < 7.4 && lng < 119.3);
+    const gigCountry =
+      typeof location === "string"
+        ? null
+        : location.place?.countryCode ?? (phByCoords(location.lat, location.lng) ? "PH" : null);
     const hostCountry = typeof h.countryCode === "string" ? h.countryCode.toUpperCase() : null;
     // Same rule as the app's country check, which fails open when a country is unknown.
     if (gigCountry && hostCountry && gigCountry !== hostCountry) {
